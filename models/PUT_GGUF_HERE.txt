@@ -1,0 +1,1 @@
+# Drop the copied Qwen3.6-35B-A3B-UD-Q4_K_M.gguf into this folder (see DEPLOY.md).
