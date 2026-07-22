@@ -1,3 +1,10 @@
+> **Historical reference.** This run predates the multi-model catalog and
+> cross-platform `install.py` — it's kept as the one real, measured data point
+> behind the VRAM/RAM fit estimates in [`MODELS.md`](MODELS.md) for the
+> Qwen3.6-35B-A3B / Q4_K_M / primary-profile case specifically. `install.py`
+> now writes a fresh `RESULTS.md` (not `-8 GB target`) at the repo root for whatever
+> model/quant/profile you actually installed — that one reflects your machine.
+
 # RESULTS — Qwen3.6-35B-A3B llama.cpp stack (8 GB profile, tested on a test GPU rig)
 
 Tested **on a different machine** (the main PC) as a stand-in for the 8 GB-class GPU laptop.

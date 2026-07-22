@@ -1,16 +1,24 @@
 #!/usr/bin/env python3
-"""Phase 3 validation for the local Qwen3.6-35B-A3B llama-server (OpenAI endpoint).
-Runs: short completion, code-gen+ast.parse, tool-calling, long-context needle.
-No third-party deps (urllib only). Prints a pass/fail table + tok/s."""
-import ast, json, sys, time, urllib.request
+"""Validation for a local llama-server (OpenAI-compatible endpoint), any model
+in installer/catalog.py. Runs: short completion, code-gen+ast.parse,
+tool-calling, long-context needle. No third-party deps (urllib only). Prints
+a pass/fail table + tok/s.
 
-BASE = "http://127.0.0.1:8080/v1"
-MODEL = "qwen3.6-35b-a3b"
+Reads LLAMA_BASE_URL / LLAMA_MODEL from the environment (set by install.py);
+falls back to the qwen3.6-35b-a3b defaults for a manual `python validate.py`
+run against run.ps1/run.sh with no arguments."""
+import ast, json, os, sys, time, urllib.request
+
+BASE = os.environ.get("LLAMA_BASE_URL", "http://127.0.0.1:8080/v1")
+MODEL = os.environ.get("LLAMA_MODEL", "qwen3.6-35b-a3b")
 results = []  # (name, passed, detail, toks_per_s)
 
 def chat(messages, tools=None, tool_choice=None, max_tokens=2048, temperature=0.2):
-    # NOTE: Qwen3.6 is a reasoning model - it emits <think> tokens (returned in a separate
-    # reasoning_content field) BEFORE the final content. max_tokens must cover BOTH.
+    # NOTE: every model in the catalog is a reasoning model - it emits <think> tokens
+    # (returned in a separate reasoning_content field) BEFORE the final content.
+    # max_tokens must cover BOTH, or content comes back empty with finish_reason=length.
+    # The defaults below were bumped after finding Qwen3.5-4B needs more thinking budget
+    # than Qwen3.6-35B-A3B did; a small/fast model isn't necessarily a terse one.
     body = {"model": MODEL, "messages": messages, "max_tokens": max_tokens,
             "temperature": temperature}
     if tools: body["tools"] = tools
@@ -40,7 +48,7 @@ def record(name, passed, detail, meta=None):
 # --- Test 1: short completion ---
 try:
     j, m = chat([{"role": "user", "content": "Answer in one short sentence: why is the sky blue?"}],
-                max_tokens=1024)
+                max_tokens=2048)
     txt = j["choices"][0]["message"]["content"].strip()
     ok = len(txt) > 15 and any(w in txt.lower() for w in ["scatter", "light", "blue", "wavelength"])
     record("short-completion", ok, repr(txt[:160]), m)
@@ -104,7 +112,7 @@ try:
               "Read carefully and tell me ONLY the exact code (format WORD-WORD-NNNN).\n\n"
               f"=== DOCUMENT START ===\n{document}\n=== DOCUMENT END ===\n\n"
               "What is the secret vault access code?")
-    j, m = chat([{"role": "user", "content": prompt}], max_tokens=2048, temperature=0.0)
+    j, m = chat([{"role": "user", "content": prompt}], max_tokens=3072, temperature=0.0)
     txt = j["choices"][0]["message"]["content"]
     ok = "PURPLE-WOMBAT-4291" in txt.upper()
     record("long-context-needle", ok,
