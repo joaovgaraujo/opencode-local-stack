@@ -27,6 +27,9 @@ RESULTS.md
 # --- Python ---
 __pycache__/
 *.pyc
+# macOS Rapid-MLX runtime created by install.py
+.rapidmlx-venv/
+.rapidmlx.pid
 
 # --- OS / editor cruft ---
 Thumbs.db

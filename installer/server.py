@@ -71,14 +71,19 @@ def start_server(server_bin, args, log_out_path, log_err_path):
     return proc
 
 
-def wait_for_health(port, timeout_s=360, interval_s=2, path="/health"):
-    """Poll path until it returns HTTP 200. Default /health matches
-    llama-server; rapid-mlx doesn't document a dedicated health route, so
-    installer/rapidmlx_setup.py polls /v1/models instead (same endpoint
-    get_served_alias reads once the server is up)."""
+def wait_for_health(port, timeout_s=360, interval_s=2, path="/health", process=None):
+    """Poll path until it returns HTTP 200, stopping if a child server exits.
+
+    ``process`` is optional so existing llama.cpp callers retain their
+    behavior. The Rapid-MLX launcher supplies its Popen object: a failed model
+    initialization should report its log error immediately, not consume the
+    30-minute first-download grace period.
+    """
     url = f"http://127.0.0.1:{port}{path}"
     deadline = time.time() + timeout_s
     while time.time() < deadline:
+        if process is not None and process.poll() is not None:
+            return False
         try:
             with urllib.request.urlopen(url, timeout=5) as r:
                 if r.status == 200:
@@ -97,22 +102,24 @@ def get_served_alias(port):
 
 
 def write_opencode_json(path, model, port, ctx, provider_key="llamacpp",
-                         provider_label="llama-server (local)"):
-    """provider_key/provider_label let installer/rapidmlx_setup.py's macOS
-    path share this writer with the llama.cpp path instead of duplicating it -
-    ctx is passed in directly rather than looked up via catalog.ctx_sizes
-    since rapid-mlx has no primary/conservative profile split (see
-    catalog.estimate_mlx_requirements)."""
+                         provider_label="llama-server (local)", served_model_id=None):
+    """Write a provider config using the exact model identifier the server accepts.
+
+    llama.cpp normally serves the catalog ID, while Rapid-MLX returns its full
+    Hugging Face repository ID. ``served_model_id`` keeps the generated
+    OpenCode configuration aligned with either backend.
+    """
+    model_id = served_model_id or model["id"]
     cfg = {
         "$schema": "https://opencode.ai/config.json",
-        "model": f"{provider_key}/{model['id']}",
+        "model": f"{provider_key}/{model_id}",
         "provider": {
             provider_key: {
                 "npm": "@ai-sdk/openai-compatible",
                 "name": provider_label,
                 "options": {"baseURL": f"http://127.0.0.1:{port}/v1"},
                 "models": {
-                    model["id"]: {
+                    model_id: {
                         "name": f"{model['display_name']} (local)",
                         "tools": True,
                         "reasoning": bool(model.get("reasoning")),

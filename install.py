@@ -215,20 +215,21 @@ def run_pipeline_mlx(model, quant, hw, skip_tests=False, port=8000, install_node
     report = {"Backend": "rapidmlx", "Hardware": "; ".join(hw.summary_lines())}
 
     log("=== 1/5 rapid-mlx CLI ===")
-    exe = rapidmlx_setup.ensure_rapidmlx(log)
+    exe = rapidmlx_setup.ensure_rapidmlx(ROOT, log)
     if not exe:
-        die("Could not install/locate rapid-mlx. Try `pip install rapid-mlx` manually, "
-            "then re-run with --bin-dir/--skip-tests as needed.")
+        die("Could not install/locate rapid-mlx. Check that `python3 -m venv` works, "
+            "then re-run the installer; it creates a project-local .rapidmlx-venv.")
 
     log("=== 2/5 Starting rapid-mlx server ===")
-    rapidmlx_setup.kill_existing()
+    rapidmlx_setup.kill_existing(ROOT)
     args = rapidmlx_setup.build_serve_args(quant["repo"], port)
     log(f"  rapid-mlx {' '.join(args)}  (first run downloads the model from Hugging Face)")
     proc = rapidmlx_setup.start_rapidmlx(exe, args, os.path.join(ROOT, "server.log"),
                                           os.path.join(ROOT, "server.err"))
+    rapidmlx_setup.write_pid(ROOT, proc.pid)
     log("  waiting for the server to come up (this includes the model download - can take a while) ...")
-    if not server.wait_for_health(port, timeout_s=1800, path="/v1/models"):
-        die("Server did not become healthy - see server.log / server.err")
+    if not server.wait_for_health(port, timeout_s=1800, path="/v1/models", process=proc):
+        die("Server did not become healthy (or exited during startup) - see server.log / server.err")
     try:
         alias = server.get_served_alias(port)
     except Exception as e:
@@ -249,7 +250,7 @@ def run_pipeline_mlx(model, quant, hw, skip_tests=False, port=8000, install_node
     log("=== 3/5 Writing config + run script ===")
     opencode_json = os.path.join(ROOT, "opencode.json")
     server.write_opencode_json(opencode_json, model, port, ctx, provider_key="rapidmlx",
-                                provider_label="rapid-mlx (local)")
+                                provider_label="rapid-mlx (local)", served_model_id=alias)
     rapidmlx_setup.write_run_script(ROOT, quant["repo"], port)
     log("  opencode.json, run.sh written")
 
@@ -261,14 +262,14 @@ def run_pipeline_mlx(model, quant, hw, skip_tests=False, port=8000, install_node
         log("  skipped (--skip-tests)")
 
     log("=== 5/5 OpenCode ===")
-    oc_result = _setup_opencode(model["id"], port, install_node, log, provider_key="rapidmlx")
+    oc_result = _setup_opencode(alias, port, install_node, log, provider_key="rapidmlx")
     test_results.update(oc_result)
 
     _write_results_md(report, test_results, log)
 
     if stop_when_done:
         log("Stopping server (--stop-when-done)")
-        rapidmlx_setup.kill_existing()
+        rapidmlx_setup.kill_existing(ROOT)
     else:
         log(f"Server left running on http://127.0.0.1:{port}/v1 (pid {proc.pid})")
 

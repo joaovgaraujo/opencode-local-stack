@@ -23,54 +23,124 @@ docs/MODELS.md), but the actual serve/health-check behavior should be
 treated as unverified until someone runs it on a Mac. Please open an issue
 with `python install.py`'s output if something here doesn't match reality.
 """
+import os
 import platform
+import shutil
+import signal
 import subprocess
 import sys
+import time
 
 
-def find_rapidmlx():
-    import shutil
+RAPIDMLX_VERSION = "0.10.15"
+VENV_DIR_NAME = ".rapidmlx-venv"
+PID_FILE_NAME = ".rapidmlx.pid"
+
+
+def _local_rapidmlx(root):
+    return os.path.join(root, VENV_DIR_NAME, "bin", "rapid-mlx")
+
+
+def find_rapidmlx(root=None):
+    """Prefer the installer-managed CLI, then honor an existing PATH install."""
+    if root:
+        local = _local_rapidmlx(root)
+        if os.path.isfile(local) and os.access(local, os.X_OK):
+            return local
     return shutil.which("rapid-mlx")
 
 
-def ensure_rapidmlx(log):
-    """Install rapid-mlx via pip (the canonical PyPI package) if the CLI
-    isn't already on PATH. Returns the resolved path, or None on failure."""
-    exe = find_rapidmlx()
+def ensure_rapidmlx(root, log):
+    """Return rapid-mlx, installing a pinned copy in a project venv if needed.
+
+    Homebrew Python follows PEP 668 and rejects global ``pip install`` calls.
+    A repository-local venv avoids modifying the system interpreter, is used by
+    the generated run.sh, and keeps the tested Rapid-MLX version reproducible.
+    """
+    exe = find_rapidmlx(root)
     if exe:
         log(f"Using existing rapid-mlx: {exe}")
         return exe
-    log("Installing rapid-mlx (pip install rapid-mlx) ...")
-    r = subprocess.run([sys.executable, "-m", "pip", "install", "--upgrade", "rapid-mlx"],
-                        capture_output=True, text=True, encoding="utf-8", errors="replace")
+
+    venv_dir = os.path.join(root, VENV_DIR_NAME)
+    venv_python = os.path.join(venv_dir, "bin", "python")
+    if not os.path.isfile(venv_python):
+        log(f"Creating {VENV_DIR_NAME} for rapid-mlx ...")
+        created = subprocess.run([sys.executable, "-m", "venv", venv_dir],
+                                 capture_output=True, text=True, encoding="utf-8",
+                                 errors="replace")
+        if created.returncode != 0:
+            log((created.stderr or created.stdout or "venv creation failed").strip()[-2000:])
+            return None
+
+    log(f"Installing rapid-mlx=={RAPIDMLX_VERSION} in {VENV_DIR_NAME} ...")
+    r = subprocess.run([venv_python, "-m", "pip", "install",
+                        f"rapid-mlx=={RAPIDMLX_VERSION}"],
+                       capture_output=True, text=True, encoding="utf-8", errors="replace")
     tail = (r.stdout or "").strip().splitlines()[-5:]
     if tail:
         log("\n".join(tail))
     if r.returncode != 0:
         log((r.stderr or "").strip()[-2000:])
         return None
-    return find_rapidmlx()
+    return find_rapidmlx(root)
 
 
 def build_serve_args(repo_id, port):
-    return ["serve", repo_id, "--port", str(port), "--host", "127.0.0.1"]
+    # The catalog deliberately contains text models only. Rapid-MLX's
+    # filename heuristic can mistake Qwen3.5 text checkpoints for MLLMs,
+    # which otherwise causes startup to require the optional mlx-vlm package.
+    return ["--no-telemetry", "serve", repo_id, "--no-mllm", "--port", str(port),
+            "--host", "127.0.0.1"]
 
 
 def start_rapidmlx(exe, args, log_out_path, log_err_path):
     out_f = open(log_out_path, "wb")
     err_f = open(log_err_path, "wb")
-    proc = subprocess.Popen([exe] + args, stdout=out_f, stderr=err_f)
-    return proc
+    return subprocess.Popen([exe] + args, stdout=out_f, stderr=err_f)
 
 
-def kill_existing():
-    """Best-effort: stop any rapid-mlx server left running from a previous run."""
+def _pid_path(root):
+    return os.path.join(root, PID_FILE_NAME)
+
+
+def write_pid(root, pid):
+    with open(_pid_path(root), "w", encoding="ascii") as f:
+        f.write(f"{pid}\n")
+
+
+def kill_existing(root):
+    """Stop only the Rapid-MLX process previously started in this repository.
+
+    The old ``pkill -f rapid-mlx`` killed every user's Rapid-MLX server,
+    including unrelated projects. A pid file lets repeat installer runs clean
+    up their own process without reaching outside the project.
+    """
+    pid_path = _pid_path(root)
     try:
-        subprocess.run(["pkill", "-f", "rapid-mlx"], capture_output=True, timeout=15)
+        with open(pid_path, encoding="ascii") as f:
+            pid = int(f.read().strip())
+    except (OSError, ValueError):
+        return
+
+    try:
+        command = subprocess.run(["ps", "-p", str(pid), "-o", "command="],
+                                 capture_output=True, text=True, timeout=5).stdout
+        if "rapid-mlx" in command:
+            os.kill(pid, signal.SIGTERM)
+            for _ in range(10):
+                time.sleep(0.2)
+                try:
+                    os.kill(pid, 0)
+                except ProcessLookupError:
+                    break
     except (OSError, subprocess.SubprocessError):
         pass
-    import time
-    time.sleep(1)
+    finally:
+        try:
+            os.remove(pid_path)
+        except OSError:
+            pass
 
 
 def is_apple_silicon_macos():
@@ -78,30 +148,29 @@ def is_apple_silicon_macos():
 
 
 def write_run_script(root, repo_id, port):
-    """Write run.sh so the server can be restarted later (with an overridable
-    port) without going through the installer again. repo_id is always a
-    catalog-defined mlx-community repo string here (not user/archive input),
-    but it's still spliced in via shlex.quote rather than bare - same
-    reasoning as server.py's write_run_scripts: cheap to do right, and it
-    means this code stays safe if the catalog ever becomes user-extensible.
-    """
-    import os
+    """Write a restart script that also works with the project-local venv."""
     import shlex
 
     sh = f"""#!/usr/bin/env bash
 # run.sh - restart the rapid-mlx server configured by install.py.
 # Regenerated each install; re-run install.py to change model/quant.
 set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
 PORT="${{PORT:-{port}}}"
 REPO={shlex.quote(repo_id)}
+LOCAL_RAPID_MLX="$SCRIPT_DIR/{VENV_DIR_NAME}/bin/rapid-mlx"
 
-command -v rapid-mlx >/dev/null 2>&1 || {{
-    echo "rapid-mlx not found on PATH. Install it with: pip install rapid-mlx" >&2
+if [ -x "$LOCAL_RAPID_MLX" ]; then
+    RAPID_MLX="$LOCAL_RAPID_MLX"
+elif command -v rapid-mlx >/dev/null 2>&1; then
+    RAPID_MLX="$(command -v rapid-mlx)"
+else
+    echo "rapid-mlx is not installed. Re-run install.py to create {VENV_DIR_NAME}." >&2
     exit 1
-}}
+fi
 
-echo "==> rapid-mlx serve $REPO --port $PORT --host 127.0.0.1"
-exec rapid-mlx serve "$REPO" --port "$PORT" --host 127.0.0.1
+echo "==> $RAPID_MLX --no-telemetry serve $REPO --no-mllm --port $PORT --host 127.0.0.1"
+exec "$RAPID_MLX" --no-telemetry serve "$REPO" --no-mllm --port "$PORT" --host 127.0.0.1
 """
     sh_path = os.path.join(root, "run.sh")
     with open(sh_path, "w", encoding="utf-8", newline="\n") as f:

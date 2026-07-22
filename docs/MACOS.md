@@ -50,8 +50,10 @@ identical claims to be "Rapid-MLX": `raullenchai/Rapid-MLX` and
 own metadata (`https://pypi.org/pypi/rapid-mlx/json` - Homepage/Repository/
 Documentation) was checked directly: all three point at
 `raullenchai/Rapid-MLX`. That's the one this installer trusts and installs
-(`pip install rapid-mlx` - the normal PyPI channel). It does **not** run the
-project's own `curl | bash` one-liner installer, for the same reason
+in a project-local `.rapidmlx-venv` (`rapid-mlx==0.10.15` from the normal
+PyPI channel). This works with Homebrew Python, which correctly rejects
+global `pip install` calls under PEP 668. It does **not** run the project's
+own `curl | bash` one-liner installer, for the same reason
 [`TURBOQUANT.md`](TURBOQUANT.md) gives for not auto-running third-party
 prebuilt binaries: piping a remote script into a shell, or trusting an
 unreviewed second implementation of the same project, isn't something this
@@ -67,6 +69,7 @@ other way first, `install.py` just uses whatever's already on PATH.
 | Memory model | separate VRAM (GPU) + RAM (CPU/experts) | one unified pool - see below |
 | MoE handling | `--cpu-moe` (experts to system RAM) | rapid-mlx manages placement itself; not configured by this installer |
 | Context/profile | `--ctx-size`, primary/conservative | no equivalent CLI flag found - `opencode.json` reuses the GGUF "primary" context as a placeholder (see `install.py`'s `run_pipeline_mlx`) |
+| Text-only serving | n/a | The catalog models are launched with `--no-mllm`; this prevents Rapid-MLX from misclassifying a text checkpoint as vision-only and requiring `mlx-vlm`. |
 | Restart script | `run.ps1` / `run.sh` | `run.sh` only (no `run.ps1` - there's no Windows rapid-mlx target) |
 
 ## Unified memory and the fit estimate

@@ -40,8 +40,14 @@ def install_node_windows():
     return find_node()
 
 
+OPENCODE_VERSION = "1.18.4"
+OPENAI_COMPAT_VERSION = "3.0.14"
+
+
 def npm_install_opencode(log):
-    r = subprocess.run(["npm", "install", "-g", "opencode-ai@latest", "@ai-sdk/openai-compatible"],
+    r = subprocess.run(
+        ["npm", "install", "-g", f"opencode-ai@{OPENCODE_VERSION}",
+         f"@ai-sdk/openai-compatible@{OPENAI_COMPAT_VERSION}"],
                         capture_output=True, text=True, encoding="utf-8", errors="replace",
                         shell=(platform.system() == "Windows"))
     tail = (r.stdout or "").strip().splitlines()[-3:]
