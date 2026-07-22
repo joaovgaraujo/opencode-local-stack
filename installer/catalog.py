@@ -1,16 +1,26 @@
 """Model catalog: every model/quant/size figure here was looked up against the
-Hugging Face API (exact GGUF filenames + byte sizes) rather than guessed — see
-docs/MODELS.md for the sources. Keep it that way when adding entries: if you
-can't verify a filename/size, don't add it.
+Hugging Face API (exact GGUF/MLX filenames + byte sizes) rather than guessed —
+see docs/MODELS.md for the sources. Keep it that way when adding entries: if
+you can't verify a filename/size, don't add it.
 
-Two serving strategies, chosen per model by `arch`:
+Two engines, chosen per platform by hwdetect.pick_engine:
 
-  moe   - MoE model served with --cpu-moe: expert tensors live in system RAM,
-          attention + KV cache stay on the GPU. VRAM use is ~constant and
-          small regardless of quant size; RAM must hold the whole quant file.
-  dense - Dense model served fully on GPU (--n-gpu-layers 999). VRAM must
-          hold the quant file plus KV cache/compute buffer; RAM needs are
-          just OS overhead.
+  llamacpp - GGUF weights served by llama-server (Windows/Linux). Each
+             model's `quants` list feeds this path. Two serving strategies
+             within it, chosen per model by `arch`:
+               moe   - served with --cpu-moe: expert tensors live in system
+                       RAM, attention + KV cache stay on the GPU. VRAM use is
+                       ~constant and small regardless of quant size; RAM must
+                       hold the whole quant file.
+               dense - served fully on GPU (--n-gpu-layers 999). VRAM must
+                       hold the quant file plus KV cache/compute buffer; RAM
+                       needs are just OS overhead.
+  rapidmlx - MLX-format weights served by the rapid-mlx CLI (Apple Silicon
+             Mac only). Each model's `mlx` list feeds this path. Apple
+             Silicon uses unified memory - there's no separate VRAM/RAM
+             split, so this engine has its own single-pool fit estimate
+             (see mlx_fit_verdict). arch/cpu-moe don't apply here: rapid-mlx
+             manages GPU/CPU placement itself.
 
 All GB figures are decimal (1 GB = 1e9 bytes), matching Hugging Face listings.
 """
@@ -24,6 +34,16 @@ MOE_VRAM_BASE_GB = {65536: 4.5, 32768: 3.8, 16384: 3.4}
 MOE_RAM_OVERHEAD_GB = 4.0          # on top of the quant file size
 DENSE_VRAM_OVERHEAD_GB = {32768: 2.5, 16384: 1.5}   # on top of the quant file size
 DENSE_RAM_OVERHEAD_GB = 3.0         # OS + mmap bookkeeping only; weights live on GPU
+
+# rapid-mlx / unified memory: everything (weights + KV cache + activations)
+# shares one pool with the OS. MLX_RAM_OVERHEAD_GB covers KV cache/activations
+# (smaller than the two-pool llama.cpp estimate since there's no separate
+# attention-on-GPU/experts-on-CPU split to account for). macOS also caps how
+# much of total RAM the GPU can actually allocate (the "wired memory limit",
+# historically ~65-75% of total unless raised via
+# `sudo sysctl iogpu.wired_limit_mb=N`) - MLX_USABLE_RAM_FRACTION models that.
+MLX_RAM_OVERHEAD_GB = 2.5
+MLX_USABLE_RAM_FRACTION = 0.75
 
 CTX_PROFILES = {
     "moe":   {"primary": 65536, "conservative": 32768},
@@ -53,6 +73,14 @@ MODELS = [
              "repo": "mad-lab-ai/Qwen3.6-35B-A3B-tq-gguf", "size_gb": 16.37,
              "experimental": True, "engine": "turboquant"},
         ],
+        "mlx": [
+            {"label": "4bit (recommended)", "repo": "mlx-community/Qwen3.6-35B-A3B-4bit",
+             "size_gb": 19.0, "default": True},
+            {"label": "6bit (higher quality)", "repo": "mlx-community/Qwen3.6-35B-A3B-6bit",
+             "size_gb": 27.07},
+            {"label": "8bit (max quality)", "repo": "mlx-community/Qwen3.6-35B-A3B-8bit",
+             "size_gb": 35.13},
+        ],
     },
     {
         "id": "gemma-4-26b-a4b",
@@ -72,6 +100,14 @@ MODELS = [
              "repo": "unsloth/gemma-4-26B-A4B-it-GGUF", "size_gb": 19.7},
             {"label": "Q8_0 (max quality)", "file": "gemma-4-26B-A4B-it-Q8_0.gguf",
              "repo": "unsloth/gemma-4-26B-A4B-it-GGUF", "size_gb": 25.02},
+        ],
+        "mlx": [
+            {"label": "4bit (recommended)", "repo": "mlx-community/gemma-4-26b-a4b-it-4bit",
+             "size_gb": 14.29, "default": True},
+            {"label": "6bit (higher quality)", "repo": "mlx-community/gemma-4-26b-a4b-it-6bit",
+             "size_gb": 20.16},
+            {"label": "8bit (max quality)", "repo": "mlx-community/gemma-4-26b-a4b-it-8bit",
+             "size_gb": 26.03},
         ],
     },
     {
@@ -93,6 +129,14 @@ MODELS = [
             {"label": "Q8_0 (max quality)", "file": "gemma-4-12b-it-Q8_0.gguf",
              "repo": "unsloth/gemma-4-12b-it-GGUF", "size_gb": 11.8},
         ],
+        "mlx": [
+            {"label": "4bit (recommended)", "repo": "mlx-community/gemma-4-12B-it-4bit",
+             "size_gb": 6.28, "default": True},
+            {"label": "6bit (higher quality)", "repo": "mlx-community/gemma-4-12B-it-6bit",
+             "size_gb": 9.06},
+            {"label": "8bit (max quality)", "repo": "mlx-community/gemma-4-12B-it-8bit",
+             "size_gb": 11.84},
+        ],
     },
     {
         "id": "gemma-4-e4b",
@@ -109,6 +153,14 @@ MODELS = [
              "repo": "unsloth/gemma-4-E4B-it-GGUF", "size_gb": 6.59},
             {"label": "Q8_0 (max quality)", "file": "gemma-4-E4B-it-Q8_0.gguf",
              "repo": "unsloth/gemma-4-E4B-it-GGUF", "size_gb": 7.63},
+        ],
+        "mlx": [
+            {"label": "4bit (recommended)", "repo": "mlx-community/gemma-4-e4b-it-4bit",
+             "size_gb": 4.79, "default": True},
+            {"label": "6bit (higher quality)", "repo": "mlx-community/gemma-4-e4b-it-6bit",
+             "size_gb": 6.53},
+            {"label": "8bit (max quality)", "repo": "mlx-community/gemma-4-e4b-it-8bit",
+             "size_gb": 8.27},
         ],
     },
     {
@@ -127,6 +179,14 @@ MODELS = [
             {"label": "Q8_0 (max quality)", "file": "Qwen3.5-4B-Q8_0.gguf",
              "repo": "unsloth/Qwen3.5-4B-GGUF", "size_gb": 4.17},
         ],
+        "mlx": [
+            {"label": "4bit (recommended)", "repo": "mlx-community/Qwen3.5-4B-4bit",
+             "size_gb": 2.83, "default": True},
+            {"label": "6bit (higher quality)", "repo": "mlx-community/Qwen3.5-4B-6bit",
+             "size_gb": 3.8},
+            {"label": "8bit (max quality)", "repo": "mlx-community/Qwen3.5-4B-8bit",
+             "size_gb": 4.78},
+        ],
     },
     {
         "id": "qwen3.5-9b",
@@ -144,6 +204,14 @@ MODELS = [
              "repo": "unsloth/Qwen3.5-9B-GGUF", "size_gb": 6.13},
             {"label": "Q8_0 (max quality)", "file": "Qwen3.5-9B-Q8_0.gguf",
              "repo": "unsloth/Qwen3.5-9B-GGUF", "size_gb": 8.87},
+        ],
+        "mlx": [
+            {"label": "4bit (recommended)", "repo": "mlx-community/Qwen3.5-9B-4bit",
+             "size_gb": 5.54, "default": True},
+            {"label": "6bit (higher quality)", "repo": "mlx-community/Qwen3.5-9B-6bit",
+             "size_gb": 7.63},
+            {"label": "8bit (max quality)", "repo": "mlx-community/Qwen3.5-9B-8bit",
+             "size_gb": 9.71},
         ],
     },
 ]
@@ -172,6 +240,20 @@ def default_quant(model):
 
 def download_url(quant):
     return HF_RESOLVE.format(repo=quant["repo"], file=quant["file"])
+
+
+def get_mlx_quant(model, repo):
+    for q in model["mlx"]:
+        if q["repo"] == repo:
+            return q
+    raise KeyError(f"Unknown MLX repo {repo!r} for model {model['id']}")
+
+
+def default_mlx_quant(model):
+    for q in model["mlx"]:
+        if q.get("default"):
+            return q
+    return model["mlx"][0]
 
 
 def ctx_sizes(model):
@@ -216,4 +298,41 @@ def all_variants():
         for quant in model["quants"]:
             for profile in ("primary", "conservative"):
                 out.append((model, quant, profile))
+    return out
+
+
+def estimate_mlx_requirements(model, quant):
+    """Return the unified-memory (RAM) estimate in GB for this model/MLX-quant.
+    No profile/context split like the GGUF path - rapid-mlx manages its own
+    context/KV sizing, so this is a single figure, not primary/conservative."""
+    return round(quant["size_gb"] + MLX_RAM_OVERHEAD_GB, 1)
+
+
+def mlx_fit_verdict(model, quant, ram_total_gb, ram_free_gb, disk_free_gb):
+    """Classify an MLX (rapid-mlx / Apple Silicon) model+quant as 'fits',
+    'tight', or 'no', against unified memory rather than separate VRAM/RAM
+    pools - see the module docstring and MLX_USABLE_RAM_FRACTION."""
+    need_ram = estimate_mlx_requirements(model, quant)
+    if disk_free_gb is not None and disk_free_gb < quant["size_gb"] + 2:
+        return "no"
+    if ram_total_gb is None:
+        return "no"
+    usable = ram_total_gb * MLX_USABLE_RAM_FRACTION
+    # ram_free_gb on macOS is a rough vm_stat-based estimate (see hwdetect.py),
+    # not an exact "available" figure the way Windows/Linux report it - treat
+    # it as a secondary signal, not the primary gate.
+    if usable >= need_ram and (ram_free_gb is None or ram_free_gb >= need_ram * 0.6):
+        return "fits"
+    if usable >= need_ram * 0.85:
+        return "tight"
+    return "no"
+
+
+def all_mlx_variants():
+    """Flatten to (model, quant) tuples for scoring against hardware - no
+    profile dimension (see estimate_mlx_requirements)."""
+    out = []
+    for model in MODELS:
+        for quant in model.get("mlx", []):
+            out.append((model, quant))
     return out

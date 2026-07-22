@@ -57,6 +57,39 @@ def choose_model_quant(hw):
         print("  invalid choice, try again")
 
 
+def _scored_mlx_options(hw):
+    options = []
+    for model, quant in catalog.all_mlx_variants():
+        verdict = catalog.mlx_fit_verdict(model, quant, hw.ram_total_gb, hw.ram_free_gb,
+                                           hw.disk_free_gb)
+        need_ram = catalog.estimate_mlx_requirements(model, quant)
+        options.append({"model": model, "quant": quant, "verdict": verdict, "need_ram": need_ram})
+    order = {"fits": 0, "tight": 1, "no": 2}
+    options.sort(key=lambda o: (order[o["verdict"]], o["model"]["total_params_b"]))
+    return options
+
+
+def choose_mlx_model_quant(hw):
+    """macOS/Apple Silicon picker - unified memory, no primary/conservative
+    profile split (see catalog.estimate_mlx_requirements)."""
+    print_hardware(hw)
+    options = _scored_mlx_options(hw)
+    print("=== Available models for rapid-mlx (sorted by fit on this machine) ===")
+    for i, o in enumerate(options, 1):
+        m, q = o["model"], o["quant"]
+        print(f"  [{i:2}] {m['display_name']:26} {q['label']:32} "
+              f"~{o['need_ram']:.1f}GB unified memory  -> {VERDICT_LABEL[o['verdict']]}")
+    print()
+    while True:
+        choice = input(f"Pick a number [1-{len(options)}] (default 1): ").strip()
+        if not choice:
+            choice = "1"
+        if choice.isdigit() and 1 <= int(choice) <= len(options):
+            picked = options[int(choice) - 1]
+            return picked["model"], picked["quant"]
+        print("  invalid choice, try again")
+
+
 def _print_experimental(hw):
     print("\n=== Experimental (TurboQuant) ===")
     print("  Requires a community llama.cpp fork with TQ kernel support - the")

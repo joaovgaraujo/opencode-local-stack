@@ -71,8 +71,12 @@ def start_server(server_bin, args, log_out_path, log_err_path):
     return proc
 
 
-def wait_for_health(port, timeout_s=360, interval_s=2):
-    url = f"http://127.0.0.1:{port}/health"
+def wait_for_health(port, timeout_s=360, interval_s=2, path="/health"):
+    """Poll path until it returns HTTP 200. Default /health matches
+    llama-server; rapid-mlx doesn't document a dedicated health route, so
+    installer/rapidmlx_setup.py polls /v1/models instead (same endpoint
+    get_served_alias reads once the server is up)."""
+    url = f"http://127.0.0.1:{port}{path}"
     deadline = time.time() + timeout_s
     while time.time() < deadline:
         try:
@@ -92,16 +96,20 @@ def get_served_alias(port):
     return data["data"][0]["id"]
 
 
-def write_opencode_json(path, model, port, profile):
-    from . import catalog
-    ctx = catalog.ctx_sizes(model)[profile]
+def write_opencode_json(path, model, port, ctx, provider_key="llamacpp",
+                         provider_label="llama-server (local)"):
+    """provider_key/provider_label let installer/rapidmlx_setup.py's macOS
+    path share this writer with the llama.cpp path instead of duplicating it -
+    ctx is passed in directly rather than looked up via catalog.ctx_sizes
+    since rapid-mlx has no primary/conservative profile split (see
+    catalog.estimate_mlx_requirements)."""
     cfg = {
         "$schema": "https://opencode.ai/config.json",
-        "model": f"llamacpp/{model['id']}",
+        "model": f"{provider_key}/{model['id']}",
         "provider": {
-            "llamacpp": {
+            provider_key: {
                 "npm": "@ai-sdk/openai-compatible",
-                "name": "llama-server (local)",
+                "name": provider_label,
                 "options": {"baseURL": f"http://127.0.0.1:{port}/v1"},
                 "models": {
                     model["id"]: {

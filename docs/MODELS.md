@@ -18,11 +18,19 @@ often enough that a guessed name is a real way to 404 mid-install.
 | **Qwen3.5-4B** | Dense | 4B | Runs on almost anything, including CPU-only. |
 | **Qwen3.5-9B** | Dense | 9B | Alibaba reports this beating much larger models on reasoning benchmarks. |
 
-Each model offers 3–4 quantizations (Q3/Q4/Q5/Q6/Q8-class, all Unsloth Dynamic
-GGUF quants) — `python install.py --list-models` prints the full list with
-exact file names and sizes.
+Each model offers 3–4 GGUF quantizations (Q3/Q4/Q5/Q6/Q8-class, all Unsloth
+Dynamic quants) for the llama.cpp engine, **and** 3 MLX quantizations
+(4bit/6bit/8bit, from `mlx-community`) for the rapid-mlx engine (macOS/Apple
+Silicon only — see [`MACOS.md`](MACOS.md)) — `python install.py --list-models`
+prints the full list for both, with exact file/repo names and sizes.
 
-## Two serving strategies
+## Two engines, two serving strategies
+
+`hwdetect.pick_engine()` picks between them automatically: `rapidmlx` on
+Apple Silicon Macs, `llamacpp` everywhere else. See [`MACOS.md`](MACOS.md)
+for the rapid-mlx side (unified memory, no VRAM/RAM split, and an important
+caveat: unlike the llama.cpp path, it wasn't validated on real hardware).
+The rest of this doc covers the llama.cpp engine's two serving strategies:
 
 - **MoE models** (Qwen3.6-35B-A3B, Gemma 4 26B-A4B) run with `--cpu-moe`: the
   expert tensors live in system RAM, attention + KV cache stay on the GPU.
@@ -60,6 +68,7 @@ just because the technique applies in principle.
 
 ## Sources checked while building this catalog (2026-07)
 
+GGUF (llama.cpp engine):
 - [unsloth/Qwen3.6-35B-A3B-GGUF](https://huggingface.co/unsloth/Qwen3.6-35B-A3B-GGUF)
 - [unsloth/gemma-4-26B-A4B-it-GGUF](https://huggingface.co/unsloth/gemma-4-26B-A4B-it-GGUF)
 - [unsloth/gemma-4-12b-it-GGUF](https://huggingface.co/unsloth/gemma-4-12b-it-GGUF)
@@ -69,3 +78,13 @@ just because the technique applies in principle.
 - [mad-lab-ai/Qwen3.6-35B-A3B-tq-gguf](https://huggingface.co/mad-lab-ai/Qwen3.6-35B-A3B-tq-gguf)
 - [ggml-org/llama.cpp releases](https://github.com/ggml-org/llama.cpp/releases/latest) (asset names for backend/OS selection)
 - [Can't disable thinking in gemma4 (26b-a4b) · llama.cpp Discussion #21338](https://github.com/ggml-org/llama.cpp/discussions/21338) — Gemma 4's jinja template has known thinking/tool-call interplay quirks on some builds; if `reasoning_content`/tool calls look wrong, update llama.cpp first.
+
+MLX (rapid-mlx engine, macOS — see [`MACOS.md`](MACOS.md)):
+- [mlx-community/Qwen3.6-35B-A3B-4bit](https://huggingface.co/mlx-community/Qwen3.6-35B-A3B-4bit) (and `-6bit`/`-8bit`)
+- [mlx-community/gemma-4-26b-a4b-it-4bit](https://huggingface.co/mlx-community/gemma-4-26b-a4b-it-4bit) (and `-6bit`/`-8bit`)
+- [mlx-community/gemma-4-12B-it-4bit](https://huggingface.co/mlx-community/gemma-4-12B-it-4bit) (and `-6bit`/`-8bit`)
+- [mlx-community/gemma-4-e4b-it-4bit](https://huggingface.co/mlx-community/gemma-4-e4b-it-4bit) (and `-6bit`/`-8bit`)
+- [mlx-community/Qwen3.5-4B-4bit](https://huggingface.co/mlx-community/Qwen3.5-4B-4bit) (and `-6bit`/`-8bit`)
+- [mlx-community/Qwen3.5-9B-4bit](https://huggingface.co/mlx-community/Qwen3.5-9B-4bit) (and `-6bit`/`-8bit`)
+- [rapid-mlx PyPI project metadata](https://pypi.org/pypi/rapid-mlx/json) — used to resolve which of two identically-described GitHub repos is canonical (see `MACOS.md`)
+- [raullenchai/Rapid-MLX](https://github.com/raullenchai/Rapid-MLX) — canonical source per the PyPI metadata above

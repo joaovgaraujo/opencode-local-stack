@@ -6,13 +6,19 @@ This module only handles presentation: hardware summary, model/quant picker
 filtered+sorted by fit, and a live log during install. The actual install
 pipeline (download, server start, tests, OpenCode setup) lives in install.py
 and is passed in as `run_pipeline`, so CLI and GUI never diverge in behavior.
+
+Branches on hwdetect.pick_engine(hw): 'llamacpp' (Windows/Linux, GGUF, has a
+primary/conservative profile) vs 'rapidmlx' (macOS/Apple Silicon, MLX repos,
+no profile split - see catalog.estimate_mlx_requirements). The picked
+model/quant/profile is handed to run_pipeline unchanged either way; profile
+is None for the rapidmlx path and install.py's wrapper dispatches on that.
 """
 import queue
 import threading
 import tkinter as tk
 from tkinter import ttk, messagebox
 
-from . import catalog
+from . import catalog, hwdetect
 
 VERDICT_COLOR = {"fits": "#1a7f37", "tight": "#9a6700", "no": "#8b8b8b"}
 VERDICT_LABEL = {"fits": "Fits", "tight": "Tight fit", "no": "Won't fit"}
@@ -37,9 +43,22 @@ def _build_rows(hw, show_experimental):
     return rows
 
 
+def _build_mlx_rows(hw):
+    rows = []
+    for model, quant in catalog.all_mlx_variants():
+        verdict = catalog.mlx_fit_verdict(model, quant, hw.ram_total_gb, hw.ram_free_gb,
+                                           hw.disk_free_gb)
+        need_ram = catalog.estimate_mlx_requirements(model, quant)
+        rows.append((model, quant, verdict, need_ram))
+    order = {"fits": 0, "tight": 1, "no": 2}
+    rows.sort(key=lambda r: (order[r[2]], r[0]["total_params_b"]))
+    return rows
+
+
 class InstallerWizard:
     def __init__(self, hw, run_pipeline):
         self.hw = hw
+        self.engine = hwdetect.pick_engine(hw)
         self.run_pipeline = run_pipeline
         self.root = tk.Tk()
         self.root.title("opencode-local installer")
@@ -60,14 +79,23 @@ class InstallerWizard:
         for line in self.hw.summary_lines():
             ttk.Label(hw_box, text=line).pack(anchor="w")
 
-        ttk.Label(self.picker, text="Pick a model + quantization (sorted by fit on this machine):",
+        engine_label = "rapid-mlx (Apple Silicon)" if self.engine == "rapidmlx" else "llama.cpp"
+        ttk.Label(self.picker, text=f"Pick a model + quantization for {engine_label} "
+                                     f"(sorted by fit on this machine):",
                   font=("", 10, "bold")).pack(anchor="w")
 
-        columns = ("model", "quant", "vram", "ram", "fit")
+        if self.engine == "rapidmlx":
+            columns = ("model", "quant", "mem", "fit")
+            headings = {"model": "Model", "quant": "Quantization", "mem": "Est. Unified Memory",
+                        "fit": "Fit"}
+            widths = {"model": 220, "quant": 300, "mem": 150, "fit": 110}
+        else:
+            columns = ("model", "quant", "vram", "ram", "fit")
+            headings = {"model": "Model", "quant": "Quantization", "vram": "Est. VRAM",
+                        "ram": "Est. RAM", "fit": "Fit"}
+            widths = {"model": 200, "quant": 300, "vram": 90, "ram": 90, "fit": 110}
+
         self.tree = ttk.Treeview(self.picker, columns=columns, show="headings", height=14)
-        headings = {"model": "Model", "quant": "Quantization", "vram": "Est. VRAM",
-                    "ram": "Est. RAM", "fit": "Fit"}
-        widths = {"model": 200, "quant": 300, "vram": 90, "ram": 90, "fit": 110}
         for c in columns:
             self.tree.heading(c, text=headings[c])
             self.tree.column(c, width=widths[c], anchor="w")
@@ -80,10 +108,11 @@ class InstallerWizard:
 
         opts = ttk.Frame(self.picker)
         opts.pack(fill="x")
-        ttk.Checkbutton(opts, text="Show experimental TurboQuant variants (needs a custom "
-                                    "llama.cpp fork - see docs/TURBOQUANT.md)",
-                        variable=self.show_experimental,
-                        command=self._populate_tree).pack(anchor="w")
+        if self.engine != "rapidmlx":
+            ttk.Checkbutton(opts, text="Show experimental TurboQuant variants (needs a custom "
+                                        "llama.cpp fork - see docs/TURBOQUANT.md)",
+                            variable=self.show_experimental,
+                            command=self._populate_tree).pack(anchor="w")
         ttk.Checkbutton(opts, text="Skip validation tests after install",
                         variable=self.skip_tests).pack(anchor="w")
 
@@ -93,20 +122,33 @@ class InstallerWizard:
 
     def _populate_tree(self):
         self.tree.delete(*self.tree.get_children())
-        self._rows = _build_rows(self.hw, self.show_experimental.get())
-        for i, (model, quant, profile, verdict, need_vram, need_ram) in enumerate(self._rows):
-            label = quant["label"] + (f"  [{profile}]" if profile != "primary" else "")
-            self.tree.insert("", "end", iid=str(i), tags=(verdict,), values=(
-                model["display_name"], label, f"{need_vram:.1f} GB", f"{need_ram:.1f} GB",
-                VERDICT_LABEL[verdict],
-            ))
+        if self.engine == "rapidmlx":
+            self._rows = _build_mlx_rows(self.hw)
+            for i, (model, quant, verdict, need_ram) in enumerate(self._rows):
+                self.tree.insert("", "end", iid=str(i), tags=(verdict,), values=(
+                    model["display_name"], quant["label"], f"{need_ram:.1f} GB",
+                    VERDICT_LABEL[verdict],
+                ))
+        else:
+            self._rows = _build_rows(self.hw, self.show_experimental.get())
+            for i, (model, quant, profile, verdict, need_vram, need_ram) in enumerate(self._rows):
+                label = quant["label"] + (f"  [{profile}]" if profile != "primary" else "")
+                self.tree.insert("", "end", iid=str(i), tags=(verdict,), values=(
+                    model["display_name"], label, f"{need_vram:.1f} GB", f"{need_ram:.1f} GB",
+                    VERDICT_LABEL[verdict],
+                ))
 
     def _on_install(self):
         sel = self.tree.selection()
         if not sel:
             messagebox.showwarning("No selection", "Pick a model/quantization first.")
             return
-        model, quant, profile, verdict, _, _ = self._rows[int(sel[0])]
+        row = self._rows[int(sel[0])]
+        if self.engine == "rapidmlx":
+            model, quant, verdict, _ = row
+            profile = None
+        else:
+            model, quant, profile, verdict, _, _ = row
         if verdict == "no":
             if not messagebox.askyesno("Doesn't fit",
                                         "This installer estimates this option will NOT fit on "

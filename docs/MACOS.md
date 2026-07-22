@@ -1,0 +1,114 @@
+# macOS / Apple Silicon (rapid-mlx)
+
+`install.py` supports macOS on Apple Silicon (M1 and later) through
+[**rapid-mlx**](https://github.com/raullenchai/Rapid-MLX), an OpenAI-compatible
+inference server built on Apple's MLX framework. It's picked automatically -
+`hwdetect.pick_engine()` returns `'rapidmlx'` whenever it detects
+`platform.system() == "Darwin"` and `platform.machine() == "arm64"`.
+
+```
+python install.py                              # GUI/CLI wizard, mlx catalog only
+python install.py --model qwen3.5-9b --non-interactive   # unattended, default quant
+python install.py --list-models                # both engines' catalogs
+```
+
+## Important: this path is unverified on real hardware
+
+Every other backend in this repo (Windows CUDA, Linux Vulkan/ROCm/CPU) was
+validated end-to-end on real hardware while being built - see
+[`RESULTS.md`](RESULTS.md) and the install/security-review history. The
+rapid-mlx path was **not** - the development environment for this repo is
+Windows, with no Apple Silicon Mac available to test against. Everything
+here (the PyPI package name, the CLI shape, the mlx-community repo ids and
+sizes) is verified against real sources (Hugging Face API, PyPI metadata,
+the project's GitHub README - see [`MODELS.md`](MODELS.md)'s sources list),
+but the actual runtime behavior - does `/v1/models` echo back exactly the
+repo id you passed, does health-check-via-polling work the way `install.py`
+assumes, does `rapid-mlx serve` accept every flag combination used here -
+should be treated as *plausible, not confirmed* until someone runs it. If
+something doesn't match, `RESULTS.md` (written after every run) plus
+`server.log`/`server.err` will show exactly what happened - please open an
+issue with those.
+
+## Why rapid-mlx and not llama.cpp's Metal build
+
+llama.cpp does publish a prebuilt macOS build (`llama-*-bin-macos-arm64.tar.gz`,
+Metal-accelerated), and it would work here too. This installer uses rapid-mlx
+instead because that's what was asked for: it's built specifically around
+MLX, which several independent sources report as 2-4x faster than llama.cpp's
+Metal backend on the same Apple Silicon hardware for supported models. If you
+want the llama.cpp/GGUF path on a Mac instead, the `quants` (GGUF) list in
+`installer/catalog.py` already has the file/repo data - `download.py` just
+doesn't have a `("cuda"|"vulkan"|..., "Darwin")` entry in `ASSET_PATTERNS`
+yet.
+
+## Resolving a naming collision before trusting anything
+
+While researching this, two different GitHub orgs were found making
+identical claims to be "Rapid-MLX": `raullenchai/Rapid-MLX` and
+`bitandmortar/rapid-mlx`. Rather than guess, the `rapid-mlx` PyPI package's
+own metadata (`https://pypi.org/pypi/rapid-mlx/json` - Homepage/Repository/
+Documentation) was checked directly: all three point at
+`raullenchai/Rapid-MLX`. That's the one this installer trusts and installs
+(`pip install rapid-mlx` - the normal PyPI channel). It does **not** run the
+project's own `curl | bash` one-liner installer, for the same reason
+[`TURBOQUANT.md`](TURBOQUANT.md) gives for not auto-running third-party
+prebuilt binaries: piping a remote script into a shell, or trusting an
+unreviewed second implementation of the same project, isn't something this
+installer will do silently on your behalf. If you install rapid-mlx some
+other way first, `install.py` just uses whatever's already on PATH.
+
+## How it differs from the llama.cpp path
+
+|  | llama.cpp (Windows/Linux) | rapid-mlx (macOS) |
+|---|---|---|
+| Weight format | GGUF | MLX (safetensors) |
+| Who downloads weights | `install.py` (from the exact `unsloth/*` file) | rapid-mlx itself, on first `serve <repo-id>` |
+| Memory model | separate VRAM (GPU) + RAM (CPU/experts) | one unified pool - see below |
+| MoE handling | `--cpu-moe` (experts to system RAM) | rapid-mlx manages placement itself; not configured by this installer |
+| Context/profile | `--ctx-size`, primary/conservative | no equivalent CLI flag found - `opencode.json` reuses the GGUF "primary" context as a placeholder (see `install.py`'s `run_pipeline_mlx`) |
+| Restart script | `run.ps1` / `run.sh` | `run.sh` only (no `run.ps1` - there's no Windows rapid-mlx target) |
+
+## Unified memory and the fit estimate
+
+Apple Silicon has no discrete VRAM - the GPU and CPU share the same physical
+RAM. `catalog.mlx_fit_verdict()` models this as a single pool:
+
+- `need_ram ≈ quant size + 2.5 GB` (KV cache/activations - smaller than the
+  llama.cpp estimate since there's no separate GPU/CPU split to account for)
+- **fits**: `need_ram ≤ total_RAM × 0.75` (macOS's approximate default GPU
+  "wired memory" ceiling) and free RAM covers most of it too
+- **tight**: within 85% of that ceiling
+- **no**: otherwise
+
+The 75% figure is a commonly-cited default for how much of total unified
+memory macOS will let the GPU actually allocate; you can raise it yourself
+with `sudo sysctl iogpu.wired_limit_mb=<N>` if you want to push closer to
+100% (at real risk of OS instability if you go too far - this isn't
+something `install.py` does for you). Free RAM on macOS (`hw.ram_free_gb`)
+is a `vm_stat`-based approximation (free + inactive pages), not an exact
+"available" figure the way Windows/Linux report it - treat it as a rough
+signal, same spirit as everywhere else in this repo: these are heuristics
+for sorting the picker, not a guarantee. Measure your own machine after
+install.
+
+## Model catalog
+
+Same six models as the llama.cpp catalog, each with 4bit/6bit/8bit MLX
+quants from `mlx-community` on Hugging Face - see
+[`MODELS.md`](MODELS.md#sources-checked-while-building-this-catalog-2026-07)
+for the exact repo ids and verified sizes. `--list-models` prints both
+catalogs together.
+
+## What you need
+
+- macOS on Apple Silicon (M1 or later). Intel Macs fall back to the
+  llama.cpp path, which isn't wired up for Darwin yet (see above) - running
+  `install.py` on an Intel Mac will currently stop with a clear error rather
+  than silently doing the wrong thing.
+- Python 3.10+ (`rapid-mlx` requires it; macOS ships an older Python 3, so
+  install a newer one first if needed - `brew install python@3.12` or
+  python.org).
+- Node.js for OpenCode - not installed silently on macOS either;
+  `install.py` prints `brew install node` (or nvm) and stops if it's
+  missing, same as Linux.

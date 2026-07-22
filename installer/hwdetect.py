@@ -14,19 +14,22 @@ import subprocess
 
 class Hardware:
     def __init__(self):
-        self.os_name = platform.system()          # 'Windows' | 'Linux' | other
-        self.gpu_vendor = None                    # 'nvidia' | 'amd' | 'other' | None
+        self.os_name = platform.system()          # 'Windows' | 'Linux' | 'Darwin'
+        self.gpu_vendor = None                    # 'nvidia' | 'amd' | 'apple' | 'other' | None
         self.gpu_name = None
         self.vram_total_gb = None
         self.vram_free_gb = None
         self.compute_cap = None                   # NVIDIA only
         self.ram_total_gb = None
-        self.ram_free_gb = None
+        self.ram_free_gb = None                   # best-effort on macOS - see _detect_ram_macos
         self.disk_free_gb = None
+        self.is_apple_silicon = False              # arm64 Mac (unified memory, no discrete VRAM)
 
     def summary_lines(self):
         lines = [f"OS: {self.os_name}"]
-        if self.gpu_vendor:
+        if self.gpu_vendor == "apple":
+            lines.append(f"GPU: {self.gpu_name or 'Apple Silicon'} (unified memory - see RAM below)")
+        elif self.gpu_vendor:
             gpu = f"GPU: {self.gpu_name or self.gpu_vendor}"
             if self.vram_total_gb is not None:
                 gpu += f"  ({self.vram_total_gb:.1f} GB VRAM"
@@ -155,6 +158,40 @@ def _detect_ram_linux(hw):
         hw.ram_free_gb = int(avail_match.group(1)) / (1024 ** 2)
 
 
+def _detect_macos(hw):
+    """Apple Silicon uses unified memory - there's no discrete VRAM, RAM *is*
+    the GPU-accessible pool (see catalog.py's mlx_fit_verdict for how that
+    changes the fit estimate vs the discrete-GPU llama.cpp path)."""
+    hw.is_apple_silicon = (platform.machine() == "arm64")
+    if hw.is_apple_silicon:
+        hw.gpu_vendor = "apple"
+        r = _run(["sysctl", "-n", "machdep.cpu.brand_string"])
+        hw.gpu_name = r.stdout.strip() if r and r.returncode == 0 and r.stdout.strip() else "Apple Silicon"
+    else:
+        # Intel Mac: has a discrete/integrated non-Apple GPU. rapid-mlx (MLX)
+        # requires Apple Silicon, so this machine isn't a rapidmlx target -
+        # see hwdetect.pick_engine.
+        hw.gpu_vendor = "other"
+        hw.gpu_name = "Intel Mac (non-Apple-Silicon GPU)"
+
+    r = _run(["sysctl", "-n", "hw.memsize"])
+    if r and r.returncode == 0 and r.stdout.strip().isdigit():
+        hw.ram_total_gb = int(r.stdout.strip()) / (1024 ** 3)
+
+    # macOS has no direct "free RAM" equivalent (aggressive disk-cache/compression
+    # make MemAvailable-style figures meaningless) - vm_stat's free+inactive page
+    # counts are the closest approximation, treated as a lower bound, not exact.
+    r = _run(["vm_stat"])
+    if r and r.returncode == 0:
+        page_size_match = re.search(r"page size of (\d+) bytes", r.stdout)
+        page_size = int(page_size_match.group(1)) if page_size_match else 4096
+        free_match = re.search(r"Pages free:\s*(\d+)", r.stdout)
+        inactive_match = re.search(r"Pages inactive:\s*(\d+)", r.stdout)
+        if free_match and inactive_match:
+            pages = int(free_match.group(1)) + int(inactive_match.group(1))
+            hw.ram_free_gb = pages * page_size / (1024 ** 3)
+
+
 def detect(root_path="."):
     hw = Hardware()
 
@@ -162,6 +199,8 @@ def detect(root_path="."):
         if not _detect_nvidia(hw):
             _detect_gpu_windows_generic(hw)
         _detect_ram_windows(hw)
+    elif hw.os_name == "Darwin":
+        _detect_macos(hw)
     else:
         if not _detect_nvidia(hw):
             if not _detect_amd(hw):
@@ -174,6 +213,17 @@ def detect(root_path="."):
         pass
 
     return hw
+
+
+def pick_engine(hw):
+    """Return 'rapidmlx' (Apple Silicon Mac) or 'llamacpp' (everything else).
+    rapid-mlx requires Apple Silicon (M1+) - an Intel Mac falls back to
+    'llamacpp', which will then hit pick_llamacpp_backend's unsupported-OS
+    error (no prebuilt llama.cpp macOS-x64 handling is wired up here; only
+    the arm64 rapidmlx path is - see install.py)."""
+    if hw.os_name == "Darwin" and hw.is_apple_silicon:
+        return "rapidmlx"
+    return "llamacpp"
 
 
 def pick_llamacpp_backend(hw):

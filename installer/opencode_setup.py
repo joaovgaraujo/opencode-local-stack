@@ -20,8 +20,13 @@ def find_npm():
 
 
 def node_install_hint():
-    if platform.system() == "Windows":
+    system = platform.system()
+    if system == "Windows":
         return "winget install -e --id OpenJS.NodeJS.LTS"
+    if system == "Darwin":
+        return ("one of:\n"
+                "    brew install node                  # Homebrew\n"
+                "    (or install via nvm: https://github.com/nvm-sh/nvm)")
     return ("one of:\n"
             "    sudo apt install nodejs npm        # Debian/Ubuntu\n"
             "    sudo dnf install nodejs npm        # Fedora\n"

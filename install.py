@@ -1,26 +1,34 @@
 #!/usr/bin/env python3
 """install.py - one-shot cross-platform installer + validator for the local
-llama.cpp + OpenCode coding-agent stack (Windows and Linux).
+LLM + OpenCode coding-agent stack (Windows, Linux, and macOS/Apple Silicon).
 
     python install.py                 # GUI wizard (falls back to text if no Tkinter)
     python install.py --cli           # force the text wizard
     python install.py --model qwen3.6-35b-a3b --quant Qwen3.6-35B-A3B-UD-Q4_K_M.gguf \\
                        --profile primary --non-interactive
-    python install.py --list-models   # print the catalog and exit
+    python install.py --list-models   # print the catalog (both engines) and exit
+
+Two engines, picked automatically by hwdetect.pick_engine - see
+docs/MODELS.md and docs/MACOS.md:
+  llamacpp - Windows/Linux: llama-server serving GGUF weights.
+  rapidmlx - macOS/Apple Silicon: rapid-mlx serving MLX weights (unverified
+             on real hardware while writing this - see docs/MACOS.md).
 
 What it does (idempotent - safe to re-run):
-  1. Detects OS, GPU (NVIDIA/AMD/other/none), VRAM, RAM, free disk.
+  1. Detects OS, GPU/unified-memory, VRAM, RAM, free disk.
   2. Lets you pick a model + quantization (GUI/CLI, filtered by what plausibly
      fits) or takes it from --model/--quant/--profile.
-  3. Downloads (or reuses) a matching prebuilt llama.cpp release and the GGUF.
-  4. Starts llama-server, waits for /health, checks the /v1/models alias.
+  3. llamacpp: downloads (or reuses) a matching prebuilt llama.cpp release and
+     the GGUF. rapidmlx: installs the rapid-mlx CLI (pip); it downloads its
+     own weights on first `serve`.
+  4. Starts the server, waits for it to become healthy, checks the /v1/models
+     alias.
   5. Runs tests/validate.py and logs peak VRAM/RAM (unless --skip-tests).
   6. Installs OpenCode, writes opencode.json, runs an agentic smoke test.
   7. Writes RESULTS.md.
 
-Node (required for OpenCode) and Python (already running, so only relevant for
-`opencode`'s own needs) are never installed silently on Linux - see
-installer/opencode_setup.py. Pass --install-node to opt in on Windows (winget).
+Node (required for OpenCode) is never installed silently except on Windows
+(--install-node opts into winget) - see installer/opencode_setup.py.
 """
 import argparse
 import json
@@ -32,7 +40,7 @@ import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from installer import catalog, download, hwdetect, opencode_setup, server
+from installer import catalog, download, hwdetect, opencode_setup, rapidmlx_setup, server
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 
@@ -128,10 +136,12 @@ def ensure_model(model, quant, model_path, log, progress):
     return model_path
 
 
-def run_pipeline(model, quant, profile, hw, skip_tests=False, port=8080, bin_dir=None,
-                  model_path=None, install_node=False, stop_when_done=False,
-                  log=print, progress=lambda *a: None):
-    """The single install pipeline shared by the CLI and GUI front-ends."""
+def run_pipeline_llamacpp(model, quant, profile, hw, skip_tests=False, port=8080, bin_dir=None,
+                          model_path=None, install_node=False, stop_when_done=False,
+                          log=print, progress=lambda *a: None):
+    """The GGUF/llama.cpp install pipeline (Windows/Linux), shared by the CLI
+    and GUI front-ends. See run_pipeline_mlx for the macOS/Apple Silicon
+    counterpart."""
     report = {}
     if quant.get("engine") == "turboquant":
         log("TurboQuant weights selected. This installer downloads the weights only - it "
@@ -169,7 +179,7 @@ def run_pipeline(model, quant, profile, hw, skip_tests=False, port=8080, bin_dir
 
     log("=== 4/6 Writing config + run scripts ===")
     opencode_json = os.path.join(ROOT, "opencode.json")
-    server.write_opencode_json(opencode_json, model, port, profile)
+    server.write_opencode_json(opencode_json, model, port, ctx)
     server.write_run_scripts(ROOT, resolved_bin_dir, resolved_model_path, model["id"],
                               model["arch"], port, ctx, "q8_0", backend)
     log("  opencode.json, run.ps1, run.sh written")
@@ -182,7 +192,7 @@ def run_pipeline(model, quant, profile, hw, skip_tests=False, port=8080, bin_dir
         log("  skipped (--skip-tests)")
 
     log("=== 6/6 OpenCode ===")
-    oc_result = _setup_opencode(model, port, install_node, log)
+    oc_result = _setup_opencode(model["id"], port, install_node, log)
     test_results.update(oc_result)
 
     _write_results_md(report, test_results, log)
@@ -190,6 +200,75 @@ def run_pipeline(model, quant, profile, hw, skip_tests=False, port=8080, bin_dir
     if stop_when_done:
         log("Stopping server (--stop-when-done)")
         server.kill_existing_server()
+    else:
+        log(f"Server left running on http://127.0.0.1:{port}/v1 (pid {proc.pid})")
+
+    return {"report": report, "tests": test_results}
+
+
+def run_pipeline_mlx(model, quant, hw, skip_tests=False, port=8000, install_node=False,
+                      stop_when_done=False, log=print, progress=lambda *a: None):
+    """The rapid-mlx install pipeline (macOS/Apple Silicon only). Unlike
+    llama.cpp, rapid-mlx manages its own weight download (see
+    installer/rapidmlx_setup.py), so there's no ensure_llamacpp/ensure_model
+    equivalent here - just "make sure the CLI is installed" then "serve"."""
+    report = {"Backend": "rapidmlx", "Hardware": "; ".join(hw.summary_lines())}
+
+    log("=== 1/5 rapid-mlx CLI ===")
+    exe = rapidmlx_setup.ensure_rapidmlx(log)
+    if not exe:
+        die("Could not install/locate rapid-mlx. Try `pip install rapid-mlx` manually, "
+            "then re-run with --bin-dir/--skip-tests as needed.")
+
+    log("=== 2/5 Starting rapid-mlx server ===")
+    rapidmlx_setup.kill_existing()
+    args = rapidmlx_setup.build_serve_args(quant["repo"], port)
+    log(f"  rapid-mlx {' '.join(args)}  (first run downloads the model from Hugging Face)")
+    proc = rapidmlx_setup.start_rapidmlx(exe, args, os.path.join(ROOT, "server.log"),
+                                          os.path.join(ROOT, "server.err"))
+    log("  waiting for the server to come up (this includes the model download - can take a while) ...")
+    if not server.wait_for_health(port, timeout_s=1800, path="/v1/models"):
+        die("Server did not become healthy - see server.log / server.err")
+    try:
+        alias = server.get_served_alias(port)
+    except Exception as e:
+        die(f"Server is up but /v1/models didn't return a usable response: {e}")
+    if alias != quant["repo"]:
+        log(f"  [WARN] /v1/models reports '{alias}', expected '{quant['repo']}' - rapid-mlx's "
+            f"exact model-id echoing wasn't verified against real hardware for this installer "
+            f"(see installer/rapidmlx_setup.py); continuing with the reported id.")
+        alias = alias or quant["repo"]
+    log(f"  healthy, alias={alias}, pid={proc.pid}")
+    # rapid-mlx's CLI surface (as documented) has no --ctx-size equivalent - reuse this
+    # model's GGUF "primary" context as a reasonable opencode.json default; adjust by hand
+    # if rapid-mlx's actual max context for this model differs.
+    ctx = catalog.ctx_sizes(model)["primary"]
+    report["Model"] = f"{model['display_name']} / {quant['label']} ({quant['repo']})"
+    report["Server"] = f"port {port}, ctx {ctx} (assumed - see note above)"
+
+    log("=== 3/5 Writing config + run script ===")
+    opencode_json = os.path.join(ROOT, "opencode.json")
+    server.write_opencode_json(opencode_json, model, port, ctx, provider_key="rapidmlx",
+                                provider_label="rapid-mlx (local)")
+    rapidmlx_setup.write_run_script(ROOT, quant["repo"], port)
+    log("  opencode.json, run.sh written")
+
+    log("=== 4/5 Validation ===")
+    test_results = {}
+    if not skip_tests:
+        test_results = _run_validate(port, alias, log)
+    else:
+        log("  skipped (--skip-tests)")
+
+    log("=== 5/5 OpenCode ===")
+    oc_result = _setup_opencode(model["id"], port, install_node, log, provider_key="rapidmlx")
+    test_results.update(oc_result)
+
+    _write_results_md(report, test_results, log)
+
+    if stop_when_done:
+        log("Stopping server (--stop-when-done)")
+        rapidmlx_setup.kill_existing()
     else:
         log(f"Server left running on http://127.0.0.1:{port}/v1 (pid {proc.pid})")
 
@@ -219,7 +298,7 @@ def _run_validate(port, model_id, log):
     return results
 
 
-def _setup_opencode(model, port, install_node, log):
+def _setup_opencode(model_id, port, install_node, log, provider_key="llamacpp"):
     results = {}
     node = opencode_setup.find_node()
     if not node:
@@ -227,14 +306,15 @@ def _setup_opencode(model, port, install_node, log):
             log("Installing Node LTS via winget ...")
             node = opencode_setup.install_node_windows()
         else:
-            log(f"Node not found - skipping OpenCode. Install it with {opencode_setup.node_install_hint()}")
+            log(f"Node not found - skipping OpenCode. Install it with "
+                f"{opencode_setup.node_install_hint()}")
             return results
     log("Installing OpenCode (npm) ...")
     opencode_setup.npm_install_opencode(log)
     dest = opencode_setup.install_config(os.path.join(ROOT, "opencode.json"))
     log(f"  opencode.json -> {dest}")
     scratch = os.path.join(ROOT, "opencode-scratch")
-    alias = f"llamacpp/{model['id']}"
+    alias = f"{provider_key}/{model_id}"
     log("  warm-up run (first run downloads ripgrep once - needs internet)")
     opencode_setup.warm_up(scratch, alias)
     log("  agentic smoke test (write + run a python file)")
@@ -267,11 +347,15 @@ def parse_args():
     p.add_argument("--cli", action="store_true", help="force the text wizard")
     p.add_argument("--list-models", action="store_true", help="print the catalog and exit")
     p.add_argument("--model", help="catalog model id, e.g. qwen3.6-35b-a3b (see --list-models)")
-    p.add_argument("--quant", help="quant GGUF filename, e.g. Qwen3.6-35B-A3B-UD-Q4_K_M.gguf")
-    p.add_argument("--profile", choices=["primary", "conservative"], default="primary")
-    p.add_argument("--port", type=int, default=8080)
-    p.add_argument("--bin-dir", default=None, help="reuse an existing llama.cpp folder")
-    p.add_argument("--model-path", default=None, help="reuse an existing GGUF instead of downloading")
+    p.add_argument("--quant", help="quant GGUF filename (llama.cpp) or mlx-community repo id "
+                                    "(rapid-mlx/macOS) - see --list-models")
+    p.add_argument("--profile", choices=["primary", "conservative"], default="primary",
+                    help="llama.cpp only - ignored on the rapid-mlx/macOS path")
+    p.add_argument("--port", type=int, default=None,
+                    help="default 8080 for llama.cpp, 8000 for rapid-mlx")
+    p.add_argument("--bin-dir", default=None, help="llama.cpp only: reuse an existing llama.cpp folder")
+    p.add_argument("--model-path", default=None,
+                    help="llama.cpp only: reuse an existing GGUF instead of downloading")
     p.add_argument("--skip-tests", action="store_true")
     p.add_argument("--stop-when-done", action="store_true")
     p.add_argument("--install-node", action="store_true", help="Windows only: winget install Node LTS")
@@ -283,10 +367,15 @@ def parse_args():
 def print_catalog():
     for model in catalog.MODELS:
         print(f"\n{model['id']}  ({model['display_name']}, {model['arch']})")
+        print("  llama.cpp (GGUF, Windows/Linux):")
         for q in model["quants"]:
             tag = " [default]" if q.get("default") else ""
             tag += " [experimental]" if q.get("experimental") else ""
             print(f"    {q['file']:45} {q['size_gb']:6.1f} GB  {q['label']}{tag}")
+        print("  rapid-mlx (MLX, macOS/Apple Silicon):")
+        for q in model.get("mlx", []):
+            tag = " [default]" if q.get("default") else ""
+            print(f"    {q['repo']:45} {q['size_gb']:6.1f} GB  {q['label']}{tag}")
 
 
 def main():
@@ -296,11 +385,17 @@ def main():
         return
 
     hw = hwdetect.detect(ROOT)
+    engine = hwdetect.pick_engine(hw)
+    port = args.port if args.port is not None else (8000 if engine == "rapidmlx" else 8080)
 
     model = quant = None
     if args.model:
         model = catalog.get_model(args.model)
-        quant = catalog.get_quant(model, args.quant) if args.quant else catalog.default_quant(model)
+        if engine == "rapidmlx":
+            quant = (catalog.get_mlx_quant(model, args.quant) if args.quant
+                     else catalog.default_mlx_quant(model))
+        else:
+            quant = catalog.get_quant(model, args.quant) if args.quant else catalog.default_quant(model)
 
     if model is None:
         if args.non_interactive:
@@ -318,21 +413,36 @@ def main():
             from installer import gui
 
             def pipeline_for_gui(m, q, prof, hw_, skip_tests, log, progress):
-                run_pipeline(m, q, prof, hw_, skip_tests=skip_tests, port=args.port,
-                             bin_dir=args.bin_dir, model_path=args.model_path,
-                             install_node=args.install_node, stop_when_done=args.stop_when_done,
-                             log=log, progress=progress)
+                _dispatch(m, q, prof, hw_, engine, port, args, skip_tests, log, progress)
 
             gui.run_gui(hw, pipeline_for_gui)
             return
         else:
             from installer import cli
-            model, quant, profile = cli.choose_model_quant(hw)
-            args.profile = profile
+            if engine == "rapidmlx":
+                model, quant = cli.choose_mlx_model_quant(hw)
+            else:
+                model, quant, args.profile = cli.choose_model_quant(hw)
 
-    run_pipeline(model, quant, args.profile, hw, skip_tests=args.skip_tests, port=args.port,
-                 bin_dir=args.bin_dir, model_path=args.model_path,
-                 install_node=args.install_node, stop_when_done=args.stop_when_done)
+    profile = None if engine == "rapidmlx" else args.profile
+    _dispatch(model, quant, profile, hw, engine, port, args, args.skip_tests, print,
+              lambda *a: None)
+
+
+def _dispatch(model, quant, profile, hw, engine, port, args, skip_tests, log, progress):
+    """Route to the right pipeline. engine comes from hwdetect.pick_engine(hw)
+    (computed once in main()) rather than re-derived from `profile is None`,
+    so a caller can't accidentally send an mlx-shaped quant down the
+    llama.cpp path by passing a profile."""
+    if engine == "rapidmlx":
+        run_pipeline_mlx(model, quant, hw, skip_tests=skip_tests, port=port,
+                          install_node=args.install_node, stop_when_done=args.stop_when_done,
+                          log=log, progress=progress)
+    else:
+        run_pipeline_llamacpp(model, quant, profile, hw, skip_tests=skip_tests, port=port,
+                              bin_dir=args.bin_dir, model_path=args.model_path,
+                              install_node=args.install_node, stop_when_done=args.stop_when_done,
+                              log=log, progress=progress)
 
 
 if __name__ == "__main__":
