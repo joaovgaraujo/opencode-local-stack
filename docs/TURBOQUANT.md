@@ -1,9 +1,31 @@
-# TurboQuant (experimental)
+# TurboQuant
 
-TurboQuant (Google Research, ICLR 2026) applies a random Hadamard rotation
-before scalar quantization, giving noticeably better quality-per-bit than
-standard GGUF quants at very low bit widths — appealing for a 35B MoE model
-you're trying to squeeze onto an 8 GB card.
+TurboQuant is used in two different ways in this project:
+
+- **Windows/Linux llama.cpp:** experimental weight/KV formats that require a
+  community fork; the official llama.cpp builds still cannot load the TQ GGUF.
+- **macOS Rapid-MLX:** native KV-cache compression in the pinned Rapid-MLX
+  0.10.15 server. `install.py` defaults to the tested K8V4 mode (8-bit rotated
+  keys + 4-bit Lloyd-Max values); use `--mlx-turboquant none` for comparison.
+
+## macOS feasibility result
+
+The linked [sharpner/turboquant-mlx](https://github.com/sharpner/turboquant-mlx)
+proof of concept was tested at commit `27dec310` on Apple Silicon with MLX 0.32.0
+and mlx-lm 0.31.3: 56 of 58 tests passed. One failure is a tighter-than-current
+MLX floating-point orthogonality tolerance; the other expects an old mlx-lm
+`QuantizedKVCache.nbytes` bug that is now fixed. Its architecture monkey-patches
+mlx-lm's SDPA path, so it is not a safe drop-in for Rapid-MLX's separate batched
+engine. The implementation here therefore uses Rapid-MLX's native K8V4 path,
+which passed all four project validations including the 30,509-token needle.
+This summary is rephrased from the linked project's documentation.
+
+## llama.cpp / GGUF path (experimental)
+
+For this backend, TurboQuant applies a random rotation before scalar
+quantization, giving noticeably better quality-per-bit than standard GGUF
+quants at very low bit widths — appealing for a 35B MoE model you're trying
+to squeeze onto an 8 GB card.
 
 **It is not part of official llama.cpp.** Support exists only as independent
 community forks, none merged upstream as of when this doc was written. That

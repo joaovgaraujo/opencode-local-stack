@@ -26,9 +26,13 @@ def _scored_options(hw):
         options.append({
             "model": model, "quant": quant, "profile": profile, "verdict": verdict,
             "need_vram": need_vram, "need_ram": need_ram,
+            "recommended": (quant.get("default") and
+                            profile == catalog.recommended_profile(model, quant, hw)),
         })
     order = {"fits": 0, "tight": 1, "no": 2}
-    options.sort(key=lambda o: (order[o["verdict"]], o["model"]["total_params_b"]))
+    options.sort(key=lambda o: (order[o["verdict"]], not o["recommended"],
+                                not o["quant"].get("default"),
+                                -o["model"]["total_params_b"]))
     return options
 
 
@@ -39,6 +43,8 @@ def choose_model_quant(hw):
     for i, o in enumerate(options, 1):
         m, q = o["model"], o["quant"]
         label = q["label"] + (f"  [{o['profile']}]" if o["profile"] != "primary" else "")
+        if o["recommended"]:
+            label += "  [recommended]"
         print(f"  [{i:2}] {m['display_name']:26} {label:42} "
               f"~{o['need_vram']:.1f}GB VRAM / ~{o['need_ram']:.1f}GB RAM  "
               f"-> {VERDICT_LABEL[o['verdict']]}")
@@ -67,7 +73,8 @@ def _scored_mlx_options(hw):
         need_ram = catalog.estimate_mlx_requirements(model, quant)
         options.append({"model": model, "quant": quant, "verdict": verdict, "need_ram": need_ram})
     order = {"fits": 0, "tight": 1, "no": 2}
-    options.sort(key=lambda o: (order[o["verdict"]], o["model"]["total_params_b"]))
+    options.sort(key=lambda o: (order[o["verdict"]], not o["quant"].get("default"),
+                                -o["model"]["total_params_b"]))
     return options
 
 

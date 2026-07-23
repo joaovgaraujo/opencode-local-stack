@@ -35,6 +35,7 @@ import time
 RAPIDMLX_VERSION = "0.10.15"
 VENV_DIR_NAME = ".rapidmlx-venv"
 PID_FILE_NAME = ".rapidmlx.pid"
+TURBOQUANT_MODES = {"k8v4", "v4", "none"}
 
 
 def _local_rapidmlx(root):
@@ -86,11 +87,15 @@ def ensure_rapidmlx(root, log):
     return find_rapidmlx(root)
 
 
-def build_serve_args(repo_id, port):
+def build_serve_args(repo_id, port, turboquant="k8v4"):
     # The catalog deliberately contains text models only. Rapid-MLX's
-    # filename heuristic can mistake Qwen3.5 text checkpoints for MLLMs,
-    # which otherwise causes startup to require the optional mlx-vlm package.
-    return ["--no-telemetry", "serve", repo_id, "--no-mllm", "--port", str(port),
+    # filename heuristic can mistake Qwen3.5 text checkpoints for MLLMs.
+    # K8V4 is Rapid-MLX's native TurboQuant cache (not the external mlx-lm
+    # monkey-patch); it passed this repository's 30k-context suite on Apple Silicon.
+    if turboquant not in TURBOQUANT_MODES:
+        raise ValueError(f"Unsupported Rapid-MLX TurboQuant mode: {turboquant}")
+    return ["--no-telemetry", "serve", repo_id, "--no-mllm",
+            "--kv-cache-turboquant", turboquant, "--port", str(port),
             "--host", "127.0.0.1"]
 
 
@@ -147,9 +152,12 @@ def is_apple_silicon_macos():
     return platform.system() == "Darwin" and platform.machine() == "arm64"
 
 
-def write_run_script(root, repo_id, port):
+def write_run_script(root, repo_id, port, turboquant="k8v4"):
     """Write a restart script that also works with the project-local venv."""
     import shlex
+
+    if turboquant not in TURBOQUANT_MODES:
+        raise ValueError(f"Unsupported Rapid-MLX TurboQuant mode: {turboquant}")
 
     sh = f"""#!/usr/bin/env bash
 # run.sh - restart the rapid-mlx server configured by install.py.
@@ -169,8 +177,8 @@ else
     exit 1
 fi
 
-echo "==> $RAPID_MLX --no-telemetry serve $REPO --no-mllm --port $PORT --host 127.0.0.1"
-exec "$RAPID_MLX" --no-telemetry serve "$REPO" --no-mllm --port "$PORT" --host 127.0.0.1
+echo "==> $RAPID_MLX --no-telemetry serve $REPO --no-mllm --kv-cache-turboquant {turboquant} --port $PORT --host 127.0.0.1"
+exec "$RAPID_MLX" --no-telemetry serve "$REPO" --no-mllm --kv-cache-turboquant {turboquant} --port "$PORT" --host 127.0.0.1
 """
     sh_path = os.path.join(root, "run.sh")
     with open(sh_path, "w", encoding="utf-8", newline="\n") as f:

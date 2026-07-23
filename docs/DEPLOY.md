@@ -13,10 +13,11 @@ doc. For the common case, just run the installer.
 python install.py
 ```
 
-Opens the GUI wizard if Tkinter is available (it ships with the standard
-python.org installer on Windows; on Linux you may need `sudo apt install
-python3-tk` or equivalent), otherwise falls back to a text wizard
-automatically. Either way it:
+Opens the GUI wizard. With Homebrew Python on macOS, the installer adds the
+matching `python-tk@X.Y` formula when `_tkinter` is missing. Windows' standard
+python.org installer includes Tk; Linux may need `python3-tk`, and unsupported
+or headless environments fall back to the text wizard with a specific repair
+message. Either way it:
 
 1. Detects OS, GPU vendor + VRAM, RAM, free disk.
 2. Shows the model/quant catalog filtered and sorted by what plausibly fits
@@ -34,14 +35,16 @@ python install.py --model qwen3.6-35b-a3b --quant Qwen3.6-35B-A3B-UD-Q4_K_M.gguf
 python install.py --list-models     # see every model id / quant filename
 ```
 
-Useful flags: `--profile conservative` (smaller context, more headroom),
-`--skip-tests`, `--model-path <existing.gguf>`, `--bin-dir <existing llama.cpp
-folder>`, `--backend auto|cuda|vulkan|rocm|cpu`, `--port <N>`, and
-`--stop-when-done`. Repeat `--extra-server-arg` to append one llama-server
-argument and persist it in `run.ps1`/`run.sh`. An argument beginning with `-`
-must use the equals form (`--extra-server-arg=--cont-batching`); provide its
-value separately (`--extra-server-arg=--threads --extra-server-arg 16`).
-These llama.cpp-only flags are rejected on the macOS Rapid-MLX path.
+Useful flags: `--profile auto` (default: maximum context with VRAM reserve),
+`--profile conservative` (force smaller context, more headroom), `--skip-tests`,
+`--model-path <existing.gguf>`, `--bin-dir <existing llama.cpp folder>`,
+`--backend auto|cuda|vulkan|rocm|cpu`, `--port <N>`, and `--stop-when-done`.
+Repeat `--extra-server-arg` to append one llama-server argument and persist it
+in `run.ps1`/`run.sh`. An argument beginning with `-` must use the equals form
+(`--extra-server-arg=--cont-batching`); provide its value separately
+(`--extra-server-arg=--threads --extra-server-arg 16`). These llama.cpp-only
+flags are rejected on the macOS Rapid-MLX path. On macOS, `--mlx-turboquant
+none` disables the native K8V4 cache for A/B tests.
 
 Node.js (required for OpenCode) is never installed silently. If it's missing,
 `install.py` prints the right command for your OS and stops — pass

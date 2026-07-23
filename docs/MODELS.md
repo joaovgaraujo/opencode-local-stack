@@ -49,8 +49,21 @@ The rest of this doc covers the llama.cpp engine's two serving strategies:
 - MoE: `VRAM need ≈ 3.4–4.5 GB` (by context size) · `RAM need ≈ quant size + 4 GB`
 - Dense: `VRAM need ≈ quant size + 1.5–2.5 GB` (by context size) · `RAM need ≈ 3 GB`
 
-These are **conservative heuristics**, not measurements — they exist to sort
-and filter the picker, not to promise an exact number. `docs/RESULTS.md` shows
+The fit check keeps **1 GB of detected free VRAM** and **2 GB of free RAM**
+in reserve. A selection that only meets the raw estimate is marked **tight**,
+not **fits**, so the default never relies on shared-memory fallback or paging.
+With `--profile auto` (the default), the installer chooses the largest context
+that retains those reserves.
+
+For the validated 8 GB 8 GB-class setup, the recommendation is
+**Qwen3.6-35B-A3B Q4_K_M** (`Qwen3.6-35B-A3B-UD-Q4_K_M.gguf`) with all experts
+in RAM via `--cpu-moe`, q8 KV, and 65,536 context when at least 5.5 GB VRAM is
+free. It measured ~4.0 GB server VRAM and ~22.7 GB RAM. If current free VRAM
+falls below the reserve threshold, auto mode selects the 32,768 profile
+instead. This keeps only the intended MoE experts in RAM; dense layers and KV
+remain GPU-resident.
+
+These remain conservative heuristics, not guarantees. `docs/RESULTS.md` shows
 what the Qwen3.6 primary profile actually measured on real hardware (~4.0 GB
 VRAM, ~22.7 GB RAM); expect similar ballpark numbers for the other MoE model,
 and re-measure with `tests/vram_logger.ps1` / a `nvidia-smi -l` loop on your

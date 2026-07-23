@@ -1,9 +1,9 @@
 """OpenCode install + config + smoke test, cross-platform.
 
 Node/npm are never installed silently on Linux (too many package managers,
-usually needs sudo) - we print the right command and stop. On Windows we
-optionally shell out to winget, which is first-party and requires no sudo
-equivalent, if the caller opts in via install_node=True.
+usually needs sudo) - we print the right command and stop. When the caller
+opts in via install_node=True we use a first-party, no-sudo installer where
+one exists: winget on Windows, Homebrew on macOS (see try_install_node).
 """
 import os
 import platform
@@ -38,6 +38,34 @@ def install_node_windows():
     subprocess.run(["winget", "install", "-e", "--id", "OpenJS.NodeJS.LTS",
                      "--accept-source-agreements", "--accept-package-agreements"])
     return find_node()
+
+
+def install_node_macos():
+    brew = shutil.which("brew")
+    if not brew:
+        return None
+    subprocess.run([brew, "install", "node"], check=False)
+    return find_node()
+
+
+def try_install_node(log):
+    """Install Node when the caller opts in and the platform has a first-party,
+    no-sudo installer. Windows: winget. macOS: Homebrew (if present). Linux is
+    not automated - too many package managers, usually needs sudo - so the
+    caller falls back to the printed node_install_hint(). Returns the node path
+    on success, else None."""
+    system = platform.system()
+    if system == "Windows":
+        log("Installing Node LTS via winget ...")
+        return install_node_windows()
+    if system == "Darwin":
+        if shutil.which("brew"):
+            log("Installing Node via Homebrew (brew install node) ...")
+            return install_node_macos()
+        log("Homebrew not found - cannot auto-install Node. "
+            "Install Homebrew (https://brew.sh) or Node directly.")
+        return None
+    return None
 
 
 OPENCODE_VERSION = "1.18.4"

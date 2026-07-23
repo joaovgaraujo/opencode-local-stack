@@ -34,6 +34,8 @@ MOE_VRAM_BASE_GB = {65536: 4.5, 32768: 3.8, 16384: 3.4}
 MOE_RAM_OVERHEAD_GB = 4.0          # on top of the quant file size
 DENSE_VRAM_OVERHEAD_GB = {32768: 2.5, 16384: 1.5}   # on top of the quant file size
 DENSE_RAM_OVERHEAD_GB = 3.0         # OS + mmap bookkeeping only; weights live on GPU
+VRAM_RESERVE_GB = 1.0                # keep display/desktop and transient buffers off the edge
+RAM_RESERVE_GB = 2.0                 # avoid paging model data under ordinary desktop load
 
 # rapid-mlx / unified memory: everything (weights + KV cache + activations)
 # shares one pool with the OS. MLX_RAM_OVERHEAD_GB covers KV cache/activations
@@ -273,21 +275,34 @@ def estimate_requirements(model, quant, profile="primary"):
 
 
 def fit_verdict(model, quant, profile, vram_gb, ram_gb, disk_free_gb):
-    """Classify whether (vram_gb, ram_gb) free resources can run this
-    model/quant/profile. Returns one of: 'fits', 'tight', 'no'."""
+    """Classify fit while reserving room for the desktop and transient buffers."""
     need_vram, need_ram = estimate_requirements(model, quant, profile)
     if disk_free_gb is not None and disk_free_gb < quant["size_gb"] + 2:
         return "no"
     if vram_gb is None:
         # No GPU detected - only viable at all for small dense models, and only
-        # via slow CPU inference. Treat as 'tight' rather than an outright 'no'
-        # so the option still surfaces with a clear warning.
+        # via slow CPU inference. Treat as 'tight' rather than an outright 'no'.
         return "tight" if ram_gb is not None and ram_gb >= need_ram + quant["size_gb"] else "no"
-    if vram_gb >= need_vram and ram_gb >= need_ram:
+    if (vram_gb >= need_vram + VRAM_RESERVE_GB and ram_gb is not None and
+            ram_gb >= need_ram + RAM_RESERVE_GB):
         return "fits"
-    if vram_gb >= need_vram * 0.75 and ram_gb >= need_ram * 0.85:
+    if vram_gb >= need_vram and ram_gb is not None and ram_gb >= need_ram:
         return "tight"
     return "no"
+
+
+def recommended_profile(model, quant, hw):
+    """Choose maximum useful context only when measured free memory has reserve.
+
+    The validated 8 GB-class Qwen3.6/Q4_K_M setup keeps 65K context when
+    at least 1 GB remains beyond the estimate; a busy GPU falls back to 32K.
+    """
+    vram = hw.vram_free_gb if hw.vram_free_gb is not None else hw.vram_total_gb
+    for profile in ("primary", "conservative"):
+        if fit_verdict(model, quant, profile, vram, hw.ram_free_gb,
+                       hw.disk_free_gb) == "fits":
+            return profile
+    return "conservative"
 
 
 def all_variants():

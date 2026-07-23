@@ -1,6 +1,6 @@
-"""Tkinter installer wizard. Tkinter ships with the standard CPython installer
-on Windows; on Linux it's sometimes a separate package (python3-tk) - if the
-import fails, install.py falls back to the CLI wizard automatically.
+"""Tkinter installer wizard. Tkinter ships with standard python.org Python
+on Windows. On Homebrew macOS, install.py bootstraps the matching
+python-tk@X.Y formula; unsupported/headless systems fall back to the CLI.
 
 This module only handles presentation: hardware summary, model/quant picker
 filtered+sorted by fit, and a live log during install. The actual install
@@ -39,7 +39,10 @@ def _build_rows(hw, show_experimental):
         need_vram, need_ram = catalog.estimate_requirements(model, quant, profile)
         rows.append((model, quant, profile, verdict, need_vram, need_ram))
     order = {"fits": 0, "tight": 1, "no": 2}
-    rows.sort(key=lambda r: (order[r[3]], r[0]["total_params_b"]))
+    rows.sort(key=lambda r: (order[r[3]],
+                             not (r[1].get("default") and
+                                  r[2] == catalog.recommended_profile(r[0], r[1], hw)),
+                             not r[1].get("default"), -r[0]["total_params_b"]))
     return rows
 
 
@@ -51,7 +54,8 @@ def _build_mlx_rows(hw):
         need_ram = catalog.estimate_mlx_requirements(model, quant)
         rows.append((model, quant, verdict, need_ram))
     order = {"fits": 0, "tight": 1, "no": 2}
-    rows.sort(key=lambda r: (order[r[2]], r[0]["total_params_b"]))
+    rows.sort(key=lambda r: (order[r[2]], not r[1].get("default"),
+                             -r[0]["total_params_b"]))
     return rows
 
 
@@ -67,6 +71,9 @@ class InstallerWizard:
         self.selection = None
         self.show_experimental = tk.BooleanVar(value=False)
         self.skip_tests = tk.BooleanVar(value=False)
+        # OpenCode needs Node; opt in by default so the GUI needs no manual
+        # prerequisites (Windows: winget, macOS: Homebrew - see opencode_setup).
+        self.install_node = tk.BooleanVar(value=True)
         self._build_picker_frame()
 
     # ---- Frame 1: hardware + model picker ----------------------------------
@@ -113,6 +120,8 @@ class InstallerWizard:
                                         "llama.cpp fork - see docs/TURBOQUANT.md)",
                             variable=self.show_experimental,
                             command=self._populate_tree).pack(anchor="w")
+        ttk.Checkbutton(opts, text="Install Node.js if missing (required for OpenCode)",
+                        variable=self.install_node).pack(anchor="w")
         ttk.Checkbutton(opts, text="Skip validation tests after install",
                         variable=self.skip_tests).pack(anchor="w")
 
@@ -125,18 +134,24 @@ class InstallerWizard:
         if self.engine == "rapidmlx":
             self._rows = _build_mlx_rows(self.hw)
             for i, (model, quant, verdict, need_ram) in enumerate(self._rows):
+                label = quant["label"] + ("  [recommended]" if i == 0 and verdict == "fits" else "")
                 self.tree.insert("", "end", iid=str(i), tags=(verdict,), values=(
-                    model["display_name"], quant["label"], f"{need_ram:.1f} GB",
+                    model["display_name"], label, f"{need_ram:.1f} GB",
                     VERDICT_LABEL[verdict],
                 ))
         else:
             self._rows = _build_rows(self.hw, self.show_experimental.get())
             for i, (model, quant, profile, verdict, need_vram, need_ram) in enumerate(self._rows):
                 label = quant["label"] + (f"  [{profile}]" if profile != "primary" else "")
+                if i == 0 and verdict == "fits":
+                    label += "  [recommended]"
                 self.tree.insert("", "end", iid=str(i), tags=(verdict,), values=(
                     model["display_name"], label, f"{need_vram:.1f} GB", f"{need_ram:.1f} GB",
                     VERDICT_LABEL[verdict],
                 ))
+        if self._rows:
+            self.tree.selection_set("0")
+            self.tree.focus("0")
 
     def _on_install(self):
         sel = self.tree.selection()
@@ -185,6 +200,7 @@ class InstallerWizard:
         try:
             self.run_pipeline(model, quant, profile, self.hw,
                                skip_tests=self.skip_tests.get(),
+                               install_node=self.install_node.get(),
                                log=self._log, progress=self._progress)
             self.log_queue.put(("done", True))
         except Exception as e:  # surface any failure into the log instead of a silent crash

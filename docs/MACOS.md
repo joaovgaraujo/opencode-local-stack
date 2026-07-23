@@ -12,23 +12,16 @@ python install.py --model qwen3.5-9b --non-interactive   # unattended, default q
 python install.py --list-models                # both engines' catalogs
 ```
 
-## Important: this path is unverified on real hardware
+## Real-hardware validation
 
-Every other backend in this repo (Windows CUDA, Linux Vulkan/ROCm/CPU) was
-validated end-to-end on real hardware while being built - see
-[`RESULTS.md`](RESULTS.md) and the install/security-review history. The
-rapid-mlx path was **not** - the development environment for this repo is
-Windows, with no Apple Silicon Mac available to test against. Everything
-here (the PyPI package name, the CLI shape, the mlx-community repo ids and
-sizes) is verified against real sources (Hugging Face API, PyPI metadata,
-the project's GitHub README - see [`MODELS.md`](MODELS.md)'s sources list),
-but the actual runtime behavior - does `/v1/models` echo back exactly the
-repo id you passed, does health-check-via-polling work the way `install.py`
-assumes, does `rapid-mlx serve` accept every flag combination used here -
-should be treated as *plausible, not confirmed* until someone runs it. If
-something doesn't match, `RESULTS.md` (written after every run) plus
-`server.log`/`server.err` will show exactly what happened - please open an
-issue with those.
+The rapid-mlx path is validated end-to-end on an Apple Silicon with sufficient memory
+unified memory using Python 3.14, Rapid-MLX 0.10.15, and
+`mlx-community/Qwen3.5-4B-4bit`. The OpenAI-compatible endpoint passed short
+completion, Python code generation, tool calling, and the 30,509-token needle
+test; OpenCode also passed its write-and-run agent test. The same four endpoint
+tests pass with Rapid-MLX's native `--kv-cache-turboquant k8v4` mode enabled.
+Per-machine `RESULTS.md`, `server.log`, and `server.err` remain the source of
+truth for other chips and larger models.
 
 ## Why rapid-mlx and not llama.cpp's Metal build
 
@@ -68,7 +61,8 @@ other way first, `install.py` just uses whatever's already on PATH.
 | Who downloads weights | `install.py` (from the exact `unsloth/*` file) | rapid-mlx itself, on first `serve <repo-id>` |
 | Memory model | separate VRAM (GPU) + RAM (CPU/experts) | one unified pool - see below |
 | MoE handling | `--cpu-moe` (experts to system RAM) | rapid-mlx manages placement itself; not configured by this installer |
-| Context/profile | `--ctx-size`, primary/conservative | no equivalent CLI flag found - `opencode.json` reuses the GGUF "primary" context as a placeholder (see `install.py`'s `run_pipeline_mlx`) |
+| Context/profile | `--ctx-size`, primary/conservative/auto | no server context flag; OpenCode uses the catalog context and K8V4 reduces long-context KV pressure |
+| KV compression | q8_0 by default | native Rapid-MLX TurboQuant K8V4 by default; `--mlx-turboquant none` disables it |
 | Text-only serving | n/a | The catalog models are launched with `--no-mllm`; this prevents Rapid-MLX from misclassifying a text checkpoint as vision-only and requiring `mlx-vlm`. |
 | Restart script | `run.ps1` / `run.sh` | `run.sh` only (no `run.ps1` - there's no Windows rapid-mlx target) |
 

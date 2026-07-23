@@ -11,8 +11,8 @@ LLM + OpenCode coding-agent stack (Windows, Linux, and macOS/Apple Silicon).
 Two engines, picked automatically by hwdetect.pick_engine - see
 docs/MODELS.md and docs/MACOS.md:
   llamacpp - Windows/Linux: llama-server serving GGUF weights.
-  rapidmlx - macOS/Apple Silicon: rapid-mlx serving MLX weights (unverified
-             on real hardware while writing this - see docs/MACOS.md).
+  rapidmlx - macOS/Apple Silicon: rapid-mlx serving MLX weights, validated
+             on Apple Silicon with native K8V4 TurboQuant KV cache.
 
 What it does (idempotent - safe to re-run):
   1. Detects OS, GPU/unified-memory, VRAM, RAM, free disk.
@@ -27,8 +27,9 @@ What it does (idempotent - safe to re-run):
   6. Installs OpenCode, writes opencode.json, runs an agentic smoke test.
   7. Writes RESULTS.md.
 
-Node (required for OpenCode) is never installed silently except on Windows
-(--install-node opts into winget) - see installer/opencode_setup.py.
+Node (required for OpenCode) is never installed silently. Pass --install-node
+(the GUI checks this by default) to opt into a first-party installer where one
+exists: winget on Windows, Homebrew on macOS - see installer/opencode_setup.py.
 """
 import argparse
 import json
@@ -253,7 +254,8 @@ def run_pipeline_llamacpp(model, quant, profile, hw, skip_tests=False, port=8080
 
 
 def run_pipeline_mlx(model, quant, hw, skip_tests=False, port=8000, install_node=False,
-                      stop_when_done=False, log=print, progress=lambda *a: None):
+                      stop_when_done=False, mlx_turboquant="k8v4", log=print,
+                      progress=lambda *a: None):
     """The rapid-mlx install pipeline (macOS/Apple Silicon only). Unlike
     llama.cpp, rapid-mlx manages its own weight download (see
     installer/rapidmlx_setup.py), so there's no ensure_llamacpp/ensure_model
@@ -268,7 +270,7 @@ def run_pipeline_mlx(model, quant, hw, skip_tests=False, port=8000, install_node
 
     log("=== 2/5 Starting rapid-mlx server ===")
     rapidmlx_setup.kill_existing(ROOT)
-    args = rapidmlx_setup.build_serve_args(quant["repo"], port)
+    args = rapidmlx_setup.build_serve_args(quant["repo"], port, mlx_turboquant)
     log(f"  rapid-mlx {' '.join(args)}  (first run downloads the model from Hugging Face)")
     proc = rapidmlx_setup.start_rapidmlx(exe, args, os.path.join(ROOT, "server.log"),
                                           os.path.join(ROOT, "server.err"))
@@ -291,13 +293,14 @@ def run_pipeline_mlx(model, quant, hw, skip_tests=False, port=8000, install_node
     # if rapid-mlx's actual max context for this model differs.
     ctx = catalog.ctx_sizes(model)["primary"]
     report["Model"] = f"{model['display_name']} / {quant['label']} ({quant['repo']})"
-    report["Server"] = f"port {port}, ctx {ctx} (assumed - see note above)"
+    report["Server"] = (f"port {port}, ctx {ctx} (assumed), "
+                        f"Rapid-MLX TurboQuant={mlx_turboquant}")
 
     log("=== 3/5 Writing config + run script ===")
     opencode_json = os.path.join(ROOT, "opencode.json")
     server.write_opencode_json(opencode_json, model, port, ctx, provider_key="rapidmlx",
                                 provider_label="rapid-mlx (local)", served_model_id=alias)
-    rapidmlx_setup.write_run_script(ROOT, quant["repo"], port)
+    rapidmlx_setup.write_run_script(ROOT, quant["repo"], port, mlx_turboquant)
     log("  opencode.json, run.sh written")
 
     log("=== 4/5 Validation ===")
@@ -349,10 +352,9 @@ def _setup_opencode(model_id, port, install_node, log, provider_key="llamacpp"):
     results = {}
     node = opencode_setup.find_node()
     if not node:
-        if install_node and platform.system() == "Windows":
-            log("Installing Node LTS via winget ...")
-            node = opencode_setup.install_node_windows()
-        else:
+        if install_node:
+            node = opencode_setup.try_install_node(log)
+        if not node:
             log(f"Node not found - skipping OpenCode. Install it with "
                 f"{opencode_setup.node_install_hint()}")
             return results
@@ -396,8 +398,10 @@ def parse_args():
     p.add_argument("--model", help="catalog model id, e.g. qwen3.6-35b-a3b (see --list-models)")
     p.add_argument("--quant", help="quant GGUF filename (llama.cpp) or mlx-community repo id "
                                     "(rapid-mlx/macOS) - see --list-models")
-    p.add_argument("--profile", choices=["primary", "conservative"], default="primary",
-                    help="llama.cpp only - ignored on the rapid-mlx/macOS path")
+    p.add_argument("--profile", choices=["auto", "primary", "conservative"], default="auto",
+                    help="llama.cpp context profile; auto keeps a 1 GB free-VRAM reserve")
+    p.add_argument("--mlx-turboquant", choices=["k8v4", "v4", "none"], default="k8v4",
+                    help="macOS only: Rapid-MLX KV cache mode (default: tested k8v4)")
     p.add_argument("--port", type=int, default=None,
                     help="default 8080 for llama.cpp, 8000 for rapid-mlx")
     p.add_argument("--bin-dir", default=None, help="llama.cpp only: reuse an existing llama.cpp folder")
@@ -455,17 +459,18 @@ def main():
             die("--non-interactive requires --model (and optionally --quant)")
         use_gui = args.gui or (not args.cli)
         if use_gui:
-            try:
-                import tkinter  # noqa: F401
-            except ImportError:
-                print("Tkinter not available - falling back to the text wizard.\n"
-                      "(Install it with your OS package manager, e.g. "
-                      "'sudo apt install python3-tk' on Debian/Ubuntu, to get the GUI.)")
+            from installer import tk_setup
+            gui_ready, detail = tk_setup.ensure_tkinter(print)
+            if not gui_ready:
+                if args.gui:
+                    die(detail)
+                print(f"{detail}\nFalling back to the text wizard.")
                 use_gui = False
         if use_gui:
             from installer import gui
 
-            def pipeline_for_gui(m, q, prof, hw_, skip_tests, log, progress):
+            def pipeline_for_gui(m, q, prof, hw_, skip_tests, install_node, log, progress):
+                args.install_node = install_node
                 _dispatch(m, q, prof, hw_, engine, port, args, skip_tests, log, progress)
 
             gui.run_gui(hw, pipeline_for_gui)
@@ -477,6 +482,10 @@ def main():
             else:
                 model, quant, args.profile = cli.choose_model_quant(hw)
 
+    if engine != "rapidmlx" and args.profile == "auto":
+        args.profile = catalog.recommended_profile(model, quant, hw)
+        print(f"Auto-selected {args.profile} context profile "
+              f"({catalog.ctx_sizes(model)[args.profile]:,} tokens with VRAM reserve).")
     profile = None if engine == "rapidmlx" else args.profile
     _dispatch(model, quant, profile, hw, engine, port, args, args.skip_tests, print,
               lambda *a: None)
@@ -493,7 +502,7 @@ def _dispatch(model, quant, profile, hw, engine, port, args, skip_tests, log, pr
                 "not the macOS Rapid-MLX engine.")
         run_pipeline_mlx(model, quant, hw, skip_tests=skip_tests, port=port,
                           install_node=args.install_node, stop_when_done=args.stop_when_done,
-                          log=log, progress=progress)
+                          mlx_turboquant=args.mlx_turboquant, log=log, progress=progress)
     else:
         selected_backend = (None if args.backend == "auto" else args.backend)
         run_pipeline_llamacpp(model, quant, profile, hw, skip_tests=skip_tests, port=port,
