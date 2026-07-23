@@ -18,7 +18,7 @@ the GPU.
 
 On Windows and Linux the engine is llama.cpp serving GGUF weights. On Apple
 Silicon it's rapid-mlx serving MLX weights. The macOS path is validated
-end-to-end on an Apple Silicon and defaults to native TurboQuant K8V4 KV-cache
+end-to-end on Apple Silicon and defaults to native TurboQuant K8V4 KV-cache
 compression. See [`docs/MACOS.md`](docs/MACOS.md).
 
 ## Quick start
@@ -66,8 +66,8 @@ The RAM and VRAM columns below are conservative estimates from the fit
 heuristic in `installer/catalog.py`, not measurements. The exception is
 Qwen3.6-35B-A3B, which was measured on real hardware. See
 [`docs/RESULTS.md`](docs/RESULTS.md) for the llama.cpp `--cpu-moe` run and
-[`docs/TURBOQUANT.md`](docs/TURBOQUANT.md) for the 12 GB-class GPU (12 GB) CUDA
-run, plus [`docs/MODELS.md`](docs/MODELS.md) for how the estimate is computed.
+[`docs/TURBOQUANT.md`](docs/TURBOQUANT.md) for the 12 GB-class CUDA run, plus
+[`docs/MODELS.md`](docs/MODELS.md) for how the estimate is computed.
 Re-measure on your own machine with `tests/benchmark.py` before capacity
 planning.
 

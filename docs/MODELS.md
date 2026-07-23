@@ -55,7 +55,7 @@ not **fits**, so the default never relies on shared-memory fallback or paging.
 With `--profile auto` (the default), the installer chooses the largest context
 that retains those reserves.
 
-For the validated 8 GB 8 GB-class setup, the recommendation is
+For the validated 8 GB-class setup, the recommendation is
 **Qwen3.6-35B-A3B Q4_K_M** (`Qwen3.6-35B-A3B-UD-Q4_K_M.gguf`) with all experts
 in RAM via `--cpu-moe`, q8 KV, and 65,536 context when at least 5.5 GB VRAM is
 free. It measured ~4.0 GB server VRAM and ~22.7 GB RAM. If current free VRAM

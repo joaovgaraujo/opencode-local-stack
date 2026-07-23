@@ -57,7 +57,7 @@ After reviewing four community implementations, this project selected
 for the current experiment because it implements the catalog's exact
 `TQ3_1S` weight type and includes Linux CUDA kernels. Revision `c26cbdf` on
 `feature/turboquant-kv-cache` was built locally from source, bare-metal, with
-CUDA 13.3 for NVIDIA the GPU arch. That local build result does **not** make the
+CUDA 13.3 for an NVIDIA CUDA GPU. That local build result does **not** make the
 fork official or generally trusted: it remains third-party code, is not
 downloaded by this installer, and must be reviewed and built by each user.
 
@@ -111,15 +111,15 @@ weight type.
 
 ## Measured Linux CUDA result
 
-A bare-metal 12 GB-class laptop GPU (12 GB), CUDA 13.3, and the selected
+A bare-metal 12 GB-class laptop GPU, CUDA 13.3, and the selected
 `c26cbdf` build successfully served the 17,581,938,944-byte TQ3_1S model at
 32,768 context. With `--n-cpu-moe 18`, q8_0 K/V cache, one slot, and thinking
 disabled for bounded tests, short completion, Python generation, tool calling,
 and a 31,549-token needle test all passed. The long prompt processed at
 332.0 tok/s; generation ranged from 2.35 to 2.78 tok/s. Peak observed server
 VRAM was 10,584 MiB (10,769 MiB total GPU use), peak RSS was 8,258 MiB, and
-at least 40.4 GiB system RAM remained available. These are measurements from
-one laptop, not portable estimates; see the local `RESULTS.md` for the full
+at least 40 GiB system RAM remained available. These are measurements from
+one machine, not portable estimates; see the local `RESULTS.md` for the full
 comparison and timeout details.
 
 If you find a verified TurboQuant GGUF repo for one of the other five models

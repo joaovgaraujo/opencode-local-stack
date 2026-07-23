@@ -2,23 +2,22 @@
 > cross-platform `install.py` — it's kept as the one real, measured data point
 > behind the VRAM/RAM fit estimates in [`MODELS.md`](MODELS.md) for the
 > Qwen3.6-35B-A3B / Q4_K_M / primary-profile case specifically. `install.py`
-> now writes a fresh `RESULTS.md` (not `-8 GB target`) at the repo root for whatever
+> now writes a fresh `RESULTS.md` at the repo root for whatever
 > model/quant/profile you actually installed — that one reflects your machine.
 
-# RESULTS — Qwen3.6-35B-A3B llama.cpp stack (8 GB profile, tested on a test GPU rig)
+# RESULTS — Qwen3.6-35B-A3B llama.cpp stack (8 GB profile)
 
-Tested **on a different machine** (the main PC) as a stand-in for the 8 GB-class GPU laptop.
-The config was **deliberately constrained to the 8 GB budget** — the rig's spare
-VRAM was left unused on purpose. See "What transfers" in `DEPLOY.md`.
+Measured on a 24 GB desktop GPU as a stand-in for an 8 GB-class laptop target.
+The config was **deliberately constrained to an 8 GB budget** — the spare VRAM
+was left unused on purpose. See "What transfers" in `DEPLOY.md`.
 
-## Test rig (this PC — NOT the target)
+## Test setup (constrained to the 8 GB target)
 
 | | |
 |---|---|
-| GPU | **24 GB desktop GPU** (**the target compute cap**) |
-| RAM | ample system RAM |
-| OS | Windows |
-| Note | Same **the GPU arch** compute cap as the 8 GB target → identical CUDA kernels run on both |
+| GPU | 24 GB desktop GPU, same GPU architecture as the 8 GB target, so identical CUDA kernels run on both |
+| RAM | ample system RAM (experts run in RAM via `--cpu-moe`) |
+| OS | Windows x64 |
 
 ## Stack
 
@@ -29,10 +28,10 @@ VRAM was left unused on purpose. See "What transfers" in `DEPLOY.md`.
 | Model size | 22,134,528,992 bytes (~20.6 GiB), verified against HF; single file (not sharded) |
 | Model meta | 34.66B params (A3B MoE), vocab 248320, n_ctx_train 262144, ftype Q4_K_M |
 
-## Final flags (primary profile — the target 8GB config)
+## Final flags (primary profile — the target 8 GB config)
 
 ```
-llama-server.exe
+llama-server
   -m Qwen3.6-35B-A3B-UD-Q4_K_M.gguf
   --alias qwen3.6-35b-a3b
   --n-gpu-layers 999          # all layers to GPU; --cpu-moe forces expert tensors to CPU/RAM
@@ -44,18 +43,19 @@ llama-server.exe
   --host 127.0.0.1 --port 8080
 ```
 
-## Performance (RE-MEASURE ON THE 8 GB target — tok/s does NOT transfer)
+## Performance (RE-MEASURE ON YOUR OWN GPU — tok/s does NOT transfer)
 
-| Metric | Value (on the test GPU rig) |
+| Metric | Value (on the test GPU) |
 |---|---|
 | Gen tok/s @ fresh context | **~47.6 tok/s** |
 | Gen tok/s @ ~30k context | **~44.4 tok/s** |
 | Prompt eval (30k prompt) | ~586 tok/s (~74s to ingest 30.5k tokens) |
 
-MoE experts run on CPU, so prompt ingestion is CPU-bound; the 8 GB target (different
-CPU, RAM bandwidth, GPU clocks, thermals) will differ — treat these as rig baselines only.
+MoE experts run on CPU, so prompt ingestion is CPU-bound; a different machine
+(CPU, RAM bandwidth, GPU clocks, thermals) will differ — treat these as
+baselines only.
 
-## VRAM / RAM fit (this DOES transfer — same 8GB-class footprint)
+## VRAM / RAM fit (this DOES transfer — same 8 GB-class footprint)
 
 Windows/WDDM does not expose per-process VRAM (`nvidia-smi` shows `[N/A]`), so the
 llama-server footprint below = (whole-card VRAM with server) − (whole-card baseline
@@ -70,8 +70,8 @@ with server stopped), sampled once per second through the 30k needle test.
   dense/attention weights + output head + compute buffer (constant, ctx-independent).
 - Halving ctx to 32768 saves ~0.7 GB VRAM. It does **not** meaningfully reduce RAM —
   the ~20 GB of experts dominate RAM regardless of ctx.
-- On the real 8 GB target, the desktop compositor eats ~1–1.5 GB, so expect ~5.5 GB total card
-  usage at the primary profile — still comfortably inside 8 GB.
+- On a real 8 GB laptop, the desktop compositor eats ~1–1.5 GB, so expect ~5.5 GB total
+  card usage at the primary profile — still comfortably inside 8 GB.
 
 ## Pass / fail table
 
@@ -84,7 +84,7 @@ with server stopped), sampled once per second through the 30k needle test.
 | VRAM fit ≤ 6.5 GB | ✅ PASS | Peak ~4.0 GB (primary), ~3.3 GB (conservative) |
 | OpenCode agentic (write+run+read) | ✅ PASS | Wrote `calc.py` = `print(2+3)`, ran it, read back `5` |
 
-**Overall: PASS.** The full target profile fits the 8GB budget with ~2.5 GB to spare.
+**Overall: PASS.** The full target profile fits the 8 GB budget with ~2.5 GB to spare.
 
 ## Gotcha found during testing (important)
 

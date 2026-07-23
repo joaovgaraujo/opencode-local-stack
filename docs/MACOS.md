@@ -14,7 +14,7 @@ python install.py --list-models                # both engines' catalogs
 
 ## Real-hardware validation
 
-The rapid-mlx path is validated end-to-end on an Apple Silicon with sufficient memory
+The rapid-mlx path is validated end-to-end on Apple Silicon with sufficient
 unified memory using Python 3.14, Rapid-MLX 0.10.15, and
 `mlx-community/Qwen3.5-4B-4bit`. The OpenAI-compatible endpoint passed short
 completion, Python code generation, tool calling, and the 30,509-token needle

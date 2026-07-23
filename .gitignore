@@ -22,8 +22,6 @@ tests/vram.log
 benchmark-results/
 opencode-scratch/
 RESULTS.md
-# legacy name, kept ignored for anyone re-running an old checkout
-RESULTS.md
 
 # --- Python ---
 __pycache__/
