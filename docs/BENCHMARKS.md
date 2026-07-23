@@ -56,3 +56,38 @@ memory to run.
 <sub>Scores compiled July 2026 from LiveCodeBench, GPQA, and tau2-bench via
 independent aggregators. They're harness- and quant-dependent; the local 4-bit
 quants score a few points below these full-precision numbers.</sub>
+
+## Local measurements on a 16 GB Apple M4
+
+Measured on one machine with rapid-mlx 0.10.15, 4bit MLX unless noted,
+TurboQuant K8V4, `--pflash off`. tok/s does not transfer between machines. The
+OpenCode column is a single smoke test (write `calc.py`, run it, report stdout),
+so a pass means the tool-calling loop works at all, not that the model handles
+real multi-step edits.
+
+| Model | Footprint | Decode | Usable context | OpenCode smoke test |
+|---|---:|---:|---:|---|
+| qwen3.5-2b | 1.3 GB | 77 tok/s | 262k | fail (prints code as text) |
+| qwen3.5-2b 8bit | 2.25 GB | 46 tok/s | 262k | fail (same as 4bit) |
+| qwen3.5-4b | 2.7 GB | 36 tok/s | 262k | fail (prints code as text) |
+| gemma-4-e2b | 3.0 GB | 61 tok/s | 130k | pass |
+| gemma-4-e4b | 4.5 GB | 32 tok/s | 130k | pass |
+| qwen3.5-9b | 5.2 GB | 20 tok/s | 262k | pass |
+| gemma-4-12b | 6.8 GB | 13 tok/s | ~1,200 tok | fail (memory, see below) |
+
+Two different reasons a model fails the smoke test:
+
+- **Capability.** Qwen 2B and 4B answer with a ` ```python ` block instead of
+  calling the write and run tools. Raising qwen3.5-2b to 8-bit did not change
+  this, so it's the model, not the quantization. Qwen needs 9B here.
+- **Memory.** gemma-4-12b tool-calls fine, but on 16 GB its usable context is
+  ~1,200 tokens, smaller than OpenCode's system prompt, so the run 503s before
+  it starts. It passes on 24 GB and up.
+
+Tool-calling doesn't track size: gemma-4-e2b drives OpenCode at 2B while
+qwen3.5-4b can't. The difference is the model's tool-call training and the
+`gemma4` parser rapid-mlx auto-selects for Gemma.
+
+A text-only GGUF of gemma-4-E2B (vision tower removed) does not save memory over
+the MLX build: it ran at 3.4 GB RSS via llama.cpp versus 3.0 GB for the MLX
+version, because MLX under `--no-mllm` already loads text-only.

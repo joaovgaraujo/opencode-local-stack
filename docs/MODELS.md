@@ -28,8 +28,8 @@ prints the full list for both, with exact file/repo names and sizes.
 
 `hwdetect.pick_engine()` picks between them automatically: `rapidmlx` on
 Apple Silicon Macs, `llamacpp` everywhere else. See [`MACOS.md`](MACOS.md)
-for the rapid-mlx side (unified memory, no VRAM/RAM split, and an important
-caveat: unlike the llama.cpp path, it wasn't validated on real hardware).
+for the rapid-mlx side (unified memory, no VRAM/RAM split; validated
+end-to-end on a 16 GB Apple M4, with measured footprints and context ceilings).
 The rest of this doc covers the llama.cpp engine's two serving strategies:
 
 - **MoE models** (Qwen3.6-35B-A3B, Gemma 4 26B-A4B) run with `--cpu-moe`: the

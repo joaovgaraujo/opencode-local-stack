@@ -86,6 +86,15 @@ system RAM. Dense VRAM scales with quant size. On macOS each model also ships
 4/6/8-bit MLX quants served from one unified-memory pool instead of a separate
 VRAM/RAM split (see [`docs/MACOS.md`](docs/MACOS.md)).
 
+On Apple Silicon the picker chooses by memory tier: qwen3.5-4b at 8 GB,
+qwen3.5-9b at 16 GB, gemma-4-12b at 24 GB, qwen3.6-35b-a3b at 32 GB and up (the
+tier table is in [`docs/MACOS.md`](docs/MACOS.md)). Fitting in memory is not the
+same as driving OpenCode: measured on a 16 GB M4, qwen3.5-9b is the smallest
+Qwen that completes the agentic smoke test (2B and 4B print code instead of
+calling tools, even at 8-bit), while Gemma's edge models tool-call at 2B. See
+[`docs/BENCHMARKS.md`](docs/BENCHMARKS.md#local-measurements-on-a-16-gb-apple-m4)
+for the per-model tok/s, context ceilings, and pass/fail.
+
 Full quant list and exact file sizes: [`docs/MODELS.md`](docs/MODELS.md).
 Independent benchmark scores per model (coding, reasoning, tool use):
 [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md).

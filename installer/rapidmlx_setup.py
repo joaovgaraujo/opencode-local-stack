@@ -16,12 +16,11 @@ Unlike llama.cpp, rapid-mlx manages its own model download - `rapid-mlx
 serve <hf-repo-id>` fetches the MLX-format weights from Hugging Face itself
 on first run. This module never touches installer/download.py.
 
-Not exercised on real Apple Silicon hardware while writing this (the dev
-environment for this repo is Windows) - the CLI shape, PyPI package name,
-and mlx-community repo ids are all verified against real sources (see
-docs/MODELS.md), but the actual serve/health-check behavior should be
-treated as unverified until someone runs it on a Mac. Please open an issue
-with `python install.py`'s output if something here doesn't match reality.
+Validated end-to-end on a 16 GB Apple M4 with rapid-mlx 0.10.15: the serve
+flags, health check, validation suite, and OpenCode agentic smoke test all
+pass with qwen3.5-9b-4bit. See docs/MACOS.md for the measured footprints,
+tok/s, and context ceilings. tok/s and the fit verdicts depend on the exact
+machine, so re-measure on yours.
 """
 import os
 import platform
