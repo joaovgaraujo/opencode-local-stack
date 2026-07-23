@@ -87,6 +87,8 @@ system RAM. Dense VRAM scales with quant size. On macOS each model also ships
 VRAM/RAM split (see [`docs/MACOS.md`](docs/MACOS.md)).
 
 Full quant list and exact file sizes: [`docs/MODELS.md`](docs/MODELS.md).
+Independent benchmark scores per model (coding, reasoning, tool use):
+[`docs/BENCHMARKS.md`](docs/BENCHMARKS.md).
 TurboQuant KV-cache compression and the experimental TQ3_1S weight format both
 need a community llama.cpp fork, so read [`docs/TURBOQUANT.md`](docs/TURBOQUANT.md)
 and [`docs/RESULTS.md`](docs/RESULTS.md) first.
@@ -122,6 +124,7 @@ tests/validate.py             the 4 functional tests (LLAMA_BASE_URL / LLAMA_MOD
 tests/benchmark.py            llama-bench wrapper with VRAM/RSS caps (Linux/Windows, CUDA/Vulkan)
 tests/vram_logger.ps1         Windows VRAM/RAM sampler
 docs/MODELS.md                full model catalog + fit-estimate methodology
+docs/BENCHMARKS.md            independent benchmark scores per model (coding, reasoning, tool use)
 docs/MACOS.md                 macOS/Apple Silicon (rapid-mlx); start here if you're on a Mac
 docs/TURBOQUANT.md            experimental TurboQuant quant + community fork links
 docs/DEPLOY.md                manual usage, GPU backend selection, MoE re-tuning

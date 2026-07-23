@@ -37,26 +37,31 @@ DENSE_RAM_OVERHEAD_GB = 3.0         # OS + mmap bookkeeping only; weights live o
 VRAM_RESERVE_GB = 1.0                # keep display/desktop and transient buffers off the edge
 RAM_RESERVE_GB = 2.0                 # avoid paging model data under ordinary desktop load
 
-# rapid-mlx / unified memory: everything (weights + KV cache + activations)
-# shares one pool with the OS. MLX_RAM_OVERHEAD_GB covers KV cache/activations;
-# MLX_USABLE_RAM_FRACTION models the ceiling rapid-mlx actually enforces at
-# runtime, which is tighter than "total RAM": the server admits a request only
-# while (active weights + projected KV) stays under
-# `gpu_memory_utilization (0.90) * Metal recommendedMaxWorkingSetSize`. On a
-# 16 GB machine that working set is ~11.4 GB, so the effective budget for
-# weights+KV is ~0.90 * 0.72 ≈ 0.65 of total RAM - anything above it comes back
-# as HTTP 503 "would exceed gpu_memory_utilization cap", not a hang.
+# rapid-mlx / unified memory: everything (weights + KV cache + prefill working
+# set + activations) shares one pool. rapid-mlx admits a request only while
+# (active weights + projected KV) stays under gpu_memory_utilization (0.90) x
+# Metal recommendedMaxWorkingSetSize; on a 16 GB machine that ceiling is
+# ~11.4 GB, so MLX_METAL_CAP_FRACTION models it as 0.71 of total RAM. Cross it
+# and the server returns HTTP 503 "would exceed gpu_memory_utilization cap".
 #
-# These were 0.75 / 2.5 GB, which rated gemma-4-12b-4bit "fits" on 16 GB and
-# ranked it the #1 pick - but its ~7.3 GB of resident weights plus the KV a
-# real request projects (6.5 GB at max_tokens=8192) blew past the 11.4 GB cap,
-# so short-completion, the 30k needle, and the OpenCode agentic test all 503'd.
-# The values below re-rate that combo "tight" (qwen3.5-9b-4bit, which passed the
-# whole suite on 16 GB, stays "fits" and becomes the top pick instead). The KV
-# overhead is sized for a coding-agent workload (long prompts, multi-k outputs);
-# a chat-only user could run larger, hence "tight" rather than "no".
-MLX_RAM_OVERHEAD_GB = 4.5
-MLX_USABLE_RAM_FRACTION = 0.65
+# The runtime memory a model needs is NOT flat across architectures, and the gap
+# is large. Two runs on the same 16 GB M4, both with TurboQuant K8V4 KV
+# compression and --pflash off:
+#   qwen3.5-9b-4bit: loads at ~5.2 GB, served its full 262,144-token context
+#                    window (memory was never the limit, only prefill speed).
+#   gemma-4-12b-4bit: loads at ~6.8 GB, but a real prompt 503s above ~1,200
+#                    tokens. Its KV plus prefill working set is far heavier, so
+#                    ~4.6 GB of headroom bought almost no usable context.
+# So the estimate is size + base overhead + a per-family KV term. Qwen (GQA,
+# TurboQuant-friendly) carries almost no KV overhead; Gemma dense carries a lot.
+# This puts gemma-4-12b at "no" on 16 GB (measured: unusable for agents there)
+# and "fits" from 24 GB up, while qwen3.5-9b "fits" from 16 GB and qwen3.5-4b is
+# the only model that fits 8 GB. The live preflight still gates actual startup.
+MLX_METAL_CAP_FRACTION = 0.71   # 11.4 GB working set on a 16 GB Mac
+MLX_WEIGHT_FACTOR = 1.05        # resident weights run slightly above file size
+MLX_BASE_OVERHEAD_GB = 1.0      # activations + a minimum prefill buffer
+MLX_KV_FACTOR = {"gemma": 1.07, "qwen": 0.0}  # KV+prefill per GB of weights
+MLX_KV_FACTOR_DEFAULT = 0.4     # unknown family: assume moderate KV weight
 
 CTX_PROFILES = {
     "moe":   {"primary": 65536, "conservative": 32768},
@@ -326,29 +331,52 @@ def all_variants():
     return out
 
 
+def _mlx_kv_factor(model):
+    """KV + prefill working-set weight, per GB of model weights, by family.
+    Gemma dense attention is heavy (measured); Qwen GQA with TurboQuant is not.
+    See the MLX_KV_FACTOR comment block for the two measured anchor runs."""
+    mid = model["id"]
+    for family, factor in MLX_KV_FACTOR.items():
+        if mid.startswith(family):
+            return factor
+    return MLX_KV_FACTOR_DEFAULT
+
+
 def estimate_mlx_requirements(model, quant):
-    """Return the unified-memory (RAM) estimate in GB for this model/MLX-quant.
-    No profile/context split like the GGUF path - rapid-mlx manages its own
-    context/KV sizing, so this is a single figure, not primary/conservative."""
-    return round(quant["size_gb"] + MLX_RAM_OVERHEAD_GB, 1)
+    """Return the peak unified-memory estimate in GB for this model/MLX-quant:
+    resident weights + a base activation/prefill buffer + a per-family KV term.
+    rapid-mlx manages its own context/KV sizing, so this is one figure, not the
+    primary/conservative split the GGUF path uses. The KV term is what separates
+    a model that holds real context on a given Mac from one that 503s on the
+    first long prompt (see MLX_KV_FACTOR)."""
+    size = quant["size_gb"]
+    return round(size * MLX_WEIGHT_FACTOR + MLX_BASE_OVERHEAD_GB
+                 + size * _mlx_kv_factor(model), 1)
 
 
 def mlx_fit_verdict(model, quant, ram_total_gb, ram_free_gb, disk_free_gb):
     """Classify an MLX (rapid-mlx / Apple Silicon) model+quant as 'fits',
-    'tight', or 'no', against unified memory rather than separate VRAM/RAM
-    pools - see the module docstring and MLX_USABLE_RAM_FRACTION."""
+    'tight', or 'no', against total unified-memory capacity.
+
+    Deliberately does NOT gate on ram_free_gb. macOS free memory is a volatile
+    vm_stat figure (the OS parks lots of RAM in inactive/cached pages), so
+    gating the picker on it made the recommended model flip between runs
+    depending on what else happened to be open - e.g. a 16 GB Mac that runs
+    qwen3.5-9b fine would silently drop to qwen3.5-4b just because a browser was
+    holding memory the moment you ran the installer. Capacity is the fixed
+    hardware fact to rank on; whether there's room *right now* is a separate
+    question answered at serve time by install.py's memory preflight
+    (hwdetect.macos_available_ram_gb). ram_free_gb stays in the signature for
+    symmetry with the llama.cpp fit_verdict and its callers."""
     need_ram = estimate_mlx_requirements(model, quant)
     if disk_free_gb is not None and disk_free_gb < quant["size_gb"] + 2:
         return "no"
     if ram_total_gb is None:
         return "no"
-    usable = ram_total_gb * MLX_USABLE_RAM_FRACTION
-    # ram_free_gb on macOS is a rough vm_stat-based estimate (see hwdetect.py),
-    # not an exact "available" figure the way Windows/Linux report it - treat
-    # it as a secondary signal, not the primary gate.
-    if usable >= need_ram and (ram_free_gb is None or ram_free_gb >= need_ram * 0.6):
+    cap = ram_total_gb * MLX_METAL_CAP_FRACTION
+    if cap >= need_ram:
         return "fits"
-    if usable >= need_ram * 0.85:
+    if cap >= need_ram * 0.85:
         return "tight"
     return "no"
 

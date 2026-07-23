@@ -68,47 +68,73 @@ other way first, `install.py` just uses whatever's already on PATH.
 
 ## Unified memory and the fit estimate
 
-Apple Silicon has no discrete VRAM - the GPU and CPU share the same physical
-RAM. `catalog.mlx_fit_verdict()` models this as a single pool:
+Apple Silicon has no discrete VRAM; the GPU and CPU share one physical pool.
+`catalog.mlx_fit_verdict()` ranks a model against total capacity, not against
+the current free RAM.
 
-- `need_ram ≈ quant size + 4.5 GB` (KV cache/activations headroom for a
-  coding-agent workload - long prompts and multi-thousand-token outputs)
-- **fits**: `need_ram ≤ total_RAM × 0.65` and free RAM covers most of it too
-- **tight**: within 85% of that ceiling
-- **no**: otherwise
+The ceiling is not total RAM. rapid-mlx admits a request only while
+`active weights + projected KV` stays under
+`gpu_memory_utilization (default 0.90) x Metal recommendedMaxWorkingSetSize`.
+On a 16 GB machine that working set measured 11.4 GB, so
+`MLX_METAL_CAP_FRACTION = 0.71` models the cap as `0.71 x total RAM`. A request
+that crosses it returns HTTP 503 `"would exceed gpu_memory_utilization cap"`,
+not a hang. You can raise the working set with `sudo sysctl
+iogpu.wired_limit_mb=<N>` (at the risk of OS instability if you push it too
+far; `install.py` never does this for you), or pass a higher
+`--gpu-memory-utilization`.
 
-The 0.65 figure is not the raw "wired memory" ceiling - it's the budget
-rapid-mlx actually enforces at request time. The server admits a request only
-while `active weights + projected KV` stays under
-`gpu_memory_utilization (default 0.90) × Metal recommendedMaxWorkingSetSize`.
-On a 16 GB machine that working set is ~11.4 GB, so the effective ceiling for
-weights + KV is ~`0.90 × 0.72 ≈ 0.65` of total RAM. Cross it and you get an
-HTTP **503** - `"would exceed gpu_memory_utilization cap"` - not a hang. You
-can raise the working set with `sudo sysctl iogpu.wired_limit_mb=<N>` (at real
-risk of OS instability if you go too far - `install.py` never does this for
-you), or pass rapid-mlx a higher `--gpu-memory-utilization`.
+The memory a model needs is not flat across architectures, and the gap is
+large. `estimate_mlx_requirements()` returns
+`size x 1.05 + 1.0 GB + size x kv_factor`, where `kv_factor` is 1.07 for Gemma
+and 0.0 for Qwen. Two runs on the same 16 GB M4 fixed those numbers, both with
+TurboQuant K8V4 and `--pflash off`:
 
-Before it starts the server, `install.py` runs a **memory preflight**
-(`hwdetect.macos_available_ram_gb()`, a fresh `vm_stat` read of free +
-inactive + speculative + purgeable pages): it aborts up front if there isn't
-even room to load the weights, and warns if there's room to load but not
-enough KV headroom for large requests. Free RAM on macOS is an approximation,
-not an exact "available" figure the way Windows/Linux report it - so these are
-heuristics for sorting the picker and catching obvious trouble early, not a
-guarantee. Measure your own machine after install.
+- `qwen3.5-9b-4bit` loads at 5.2 GB and served its full 262,144-token context
+  window; memory was never the limit, only prefill speed.
+- `gemma-4-12b-4bit` loads at 6.8 GB, but a real prompt 503s above ~1,200
+  tokens. Its KV plus prefill working set is far heavier, so 4.6 GB of headroom
+  bought almost no usable context.
 
-### Measured notes (16 GB Apple Silicon, rapid-mlx `0.10.15`)
+A model is `fits` when `need <= cap`, `tight` within 15% above the cap, `no`
+beyond that. The result is a per-tier auto-pick (default 4bit quant):
 
-Numbers from an end-to-end run of `install.py` + `tests/validate.py`; tok/s
-never transfers between machines, so treat these as fit/behavior notes, not a
-benchmark:
+| Unified memory | Auto-pick | Also fits |
+|---|---|---|
+| 8 GB | `qwen3.5-4b` | (only the 4B) |
+| 16 GB | `qwen3.5-9b` | qwen3.5-4b, gemma-4-e4b |
+| 24 GB | `gemma-4-12b` | qwen3.5-9b, gemma-4-e4b |
+| 32 GB | `qwen3.6-35b-a3b` | gemma-4-12b |
+| 48 GB+ | `qwen3.6-35b-a3b` | gemma-4-26b-a4b |
 
-| Model (4bit MLX) | Resident footprint | Verdict on 16 GB | Notes |
-|---|---:|---|---|
-| **Qwen3.5-9B** | ~5.2 GB | **fits** (top pick) | Passed all four validation tests *and* the OpenCode agentic smoke test with ~5-6 GB of KV headroom to spare. This is what the picker now recommends first on a 16 GB machine. |
-| **Gemma 4 12B** | ~7.8 GB | **tight** | Loads and answers short prompts fine (chat, code-gen, tool-calling passed), but `max_tokens=8192` and the ~30k-token needle test both 503'd: `Metal active 7.3 GB + projected KV 6.5 GB > cap 11.4 GB`. Usable for light chat on 16 GB, not for long-context/agentic work - hence "tight", and no longer the default pick. |
+Ranking uses total memory, not free RAM, on purpose. macOS parks most of its
+RAM in inactive and cached pages, so a free-RAM gate made the pick flip between
+runs: a 16 GB Mac that runs `qwen3.5-9b` would drop to `qwen3.5-4b` because a
+browser held memory at that moment. Whether there's room right now is a
+separate question, answered at serve time by the preflight.
 
-Two startup gotchas the installer now handles automatically:
+Before starting the server, `install.py` runs a memory preflight
+(`hwdetect.macos_available_ram_gb()`, a fresh `vm_stat` read of free, inactive,
+speculative, and purgeable pages). It aborts if there isn't room to load the
+weights, and warns if there's room to load but not enough KV headroom. Free RAM
+on macOS is an approximation, so this catches obvious trouble early rather than
+guaranteeing a fit. Measure your own machine after install.
+
+### Measured performance (16 GB Apple Silicon M4, rapid-mlx 0.10.15)
+
+Both models at 4bit MLX, TurboQuant K8V4, `--pflash off`. tok/s does not
+transfer between machines; re-measure your own.
+
+| Model | Footprint | Decode | Prefill | Max usable context |
+|---|---:|---:|---:|---:|
+| `qwen3.5-9b-4bit` | 5.2 GB | 20.5 tok/s | ~198 tok/s | ~262,000 tok (full window; prefill speed is the limit) |
+| `gemma-4-12b-4bit` | 6.8 GB | 13.2 tok/s | ~83 tok/s | ~1,200 tok with 256-token output; ~690 with 1024 |
+
+On 16 GB, `gemma-4-12b`'s usable context is smaller than a typical OpenCode
+system prompt, which is why it 503'd the agentic smoke test. The catalog rates
+it `no` at 16 GB and `fits` from 24 GB up. `qwen3.5-9b` holds real context on
+16 GB, so it's the pick there.
+
+Two startup problems the installer now handles automatically:
 
 - **`rapid-mlx` version.** The `--kv-cache-turboquant <mode>` value form and
   the `--pflash` flag are `0.10.x`-era; an older Homebrew/pipx `rapid-mlx`
