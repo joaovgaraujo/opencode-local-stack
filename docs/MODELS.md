@@ -16,7 +16,7 @@ often enough that a guessed name is a real way to 404 mid-install.
 | **Gemma 4 12B (Unified)** | Dense | 12B | Fits fully on an 8GB-class GPU at Q4_K_M. |
 | **Gemma 4 E4B** | Dense | ~4B (elastic) | Smallest Gemma 4 text-capable size. |
 | **Qwen3.5-4B** | Dense | 4B | Runs on almost anything, including CPU-only. |
-| **Qwen3.5-9B** | Dense | 9B | Alibaba reports this beating much larger models on reasoning benchmarks. |
+| **Qwen3.5-9B** | Dense | 9B | Largest dense model in this catalog. |
 
 Each model offers 3–4 GGUF quantizations (Q3/Q4/Q5/Q6/Q8-class, all Unsloth
 Dynamic quants) for the llama.cpp engine, **and** 3 MLX quantizations

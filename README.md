@@ -10,8 +10,9 @@ detects your hardware and only shows you the combinations that plausibly fit.
 
 The trick behind the biggest model (Qwen3.6-35B-A3B, 35B total / 3B active):
 MoE expert weights live in system RAM (`--cpu-moe`) while attention + the KV
-cache stay on the GPU, so a 35B model fits in ~4 GB of VRAM. Smaller dense
-models just run fully on GPU.
+cache stay on the GPU, so a 35B model fits in a few GB of VRAM (measured
+2.7–6.0 GB across 8k–256k context on a 12 GB card — see
+[`RESULTS.md`](RESULTS.md)). Smaller dense models just run fully on GPU.
 
 One command (`install.py`) detects your hardware, lets you pick a model, and
 sets up + validates everything. On Windows/Linux that's llama.cpp serving
@@ -77,24 +78,39 @@ for your OS and stops (or pass `--install-node` on Windows to let it
 
 ## Pick a model
 
-| Model | Arch | Size | Good for |
-|---|---|---|---|
-| **Qwen3.6-35B-A3B** | MoE 35B/3B active | 15.7–34.4 GB (quant-dependent) | Best quality; needs ~24 GB free RAM, only ~4 GB VRAM |
-| **Gemma 4 26B-A4B** | MoE 26B/4B active | 12–25 GB | Same trick, lighter RAM footprint |
-| **Gemma 4 12B (Unified)** | Dense | 6.6–11.8 GB | Fits fully on an 8 GB-class GPU |
-| **Qwen3.5-9B** | Dense | 5.3–8.9 GB | Alibaba reports it beating much larger models on reasoning benchmarks |
-| **Gemma 4 E4B** | Dense | 4.6–7.6 GB | Smallest Gemma 4 text model |
-| **Qwen3.5-4B** | Dense | 2.6–4.2 GB | Runs on almost anything, including CPU-only |
+Sizes below are for each model's Q4_K_M/Q4_K_M-class quant (the installer's
+default) at the primary context profile. **RAM/VRAM columns are conservative
+estimates from `installer/catalog.py`'s fit heuristic, not measurements**,
+except Qwen3.6-35B-A3B, which is the one model actually benchmarked on real
+hardware (12 GB-class GPU, 12 GB) — see [`RESULTS.md`](RESULTS.md) for the exact
+numbers and [`docs/MODELS.md`](docs/MODELS.md) for how the estimate is
+computed. Always re-measure on your own machine with `tests/benchmark.py` or
+`tests/vram_logger.ps1` before capacity planning.
 
-Sizes above are GGUF (llama.cpp/Windows/Linux); on macOS each model also has
-4bit/6bit/8bit MLX quants (smaller — e.g. Qwen3.5-4B is 2.8–4.8 GB in MLX)
-served by rapid-mlx instead — see [`docs/MACOS.md`](docs/MACOS.md).
+| Model | Arch | Default quant | Est. VRAM | Est. RAM | Notes |
+|---|---|---:|---:|---:|---|
+| **Qwen3.6-35B-A3B** | MoE 35B/3B active | 20.6 GB | ~2.7–6.0 GB (measured, `--cpu-moe`, 8k–256k ctx) | ~21–22 GB (measured RSS) | See [`RESULTS.md`](RESULTS.md) for measured CUDA/Vulkan tok/s and TurboQuant KV-cache results |
+| **Gemma 4 26B-A4B** | MoE 26B/4B active | 15.8 GB | ~3.8–4.5 GB (est., by context) | ~19.8 GB (est.) | Same `--cpu-moe` trick as Qwen3.6, lighter RAM footprint |
+| **Gemma 4 12B (Unified)** | Dense | 6.6 GB | ~8.1–9.1 GB (est., conservative/primary profile) | ~3 GB (est.) | Fits fully on an 8 GB-class GPU |
+| **Qwen3.5-9B** | Dense | 5.3 GB | ~6.8–7.8 GB (est., conservative/primary profile) | ~3 GB (est.) | Largest dense model in this catalog |
+| **Gemma 4 E4B** | Dense | 4.6 GB | ~6.1–7.1 GB (est., conservative/primary profile) | ~3 GB (est.) | Smallest Gemma 4 text model |
+| **Qwen3.5-4B** | Dense | 2.6 GB | ~4.1–5.1 GB (est., conservative/primary profile) | ~3 GB (est.) | Runs on almost anything, including CPU-only |
+
+MoE VRAM stays roughly constant regardless of quant size (experts live in
+system RAM); dense VRAM scales directly with quant size. On macOS each model
+also has 4bit/6bit/8bit MLX quants (smaller — e.g. Qwen3.5-4B is 2.8–4.8 GB in
+MLX) served by rapid-mlx instead, sharing one unified-memory pool instead of
+a separate VRAM/RAM split — see [`docs/MACOS.md`](docs/MACOS.md).
 
 Full quant list, exact file sizes, and how the fit estimate is computed:
-[`docs/MODELS.md`](docs/MODELS.md). An experimental TurboQuant quant is also
-available for Qwen3.6-35B-A3B — see [`docs/TURBOQUANT.md`](docs/TURBOQUANT.md)
-before reaching for it (it needs a community llama.cpp fork, not the stock
-build the installer downloads).
+[`docs/MODELS.md`](docs/MODELS.md). Standard Q4_K_M weights can also be paired
+with TurboQuant's KV-cache compression (`turbo3`/`turbo4`) for a smaller GPU
+footprint at long context; a separate experimental TurboQuant *weight* format
+(TQ3_1S) is available for Qwen3.6-35B-A3B but was measured far slower for
+this MoE model's CPU-offloaded experts — see
+[`docs/TURBOQUANT.md`](docs/TURBOQUANT.md) and [`RESULTS.md`](RESULTS.md)
+before reaching for either (they need a community llama.cpp fork, not the
+stock build the installer downloads).
 
 ---
 
@@ -115,9 +131,11 @@ build the installer downloads).
   because llama.cpp doesn't publish a prebuilt Linux CUDA binary. A custom
   CUDA build is supported with `--backend cuda --bin-dir <build/bin>`; see
   [`docs/DEPLOY.md`](docs/DEPLOY.md#linux--nvidia-vulkan-vs-building-cuda-from-source).
-- **Memory is not measured by `install.py` yet.** Use `tests/vram_logger.ps1`
-  on Windows or sample `nvidia-smi` plus the server process RSS on Linux while
-  `tests/validate.py` runs; idle allocation is not a trustworthy peak.
+- **`install.py` itself doesn't measure memory.** Use `tests/benchmark.py` (a
+  stdlib-only `llama-bench` wrapper that enforces VRAM/RSS caps and reports
+  peaks) or `tests/vram_logger.ps1` on Windows, or sample `nvidia-smi` plus
+  the server process RSS on Linux while `tests/validate.py` runs; idle
+  allocation is not a trustworthy peak.
 
 ## Repo layout
 
@@ -128,6 +146,7 @@ installer/rapidmlx_setup.py   macOS/Apple Silicon engine
 opencode.json                 OpenCode -> local endpoint config (regenerated per install)
 models/                       drop a GGUF here, or let the installer download it (llama.cpp engine)
 tests/validate.py             the 4 functional tests (LLAMA_BASE_URL / LLAMA_MODEL env-driven)
+tests/benchmark.py            llama-bench wrapper with VRAM/RSS caps (Linux/Windows, CUDA/Vulkan/etc.)
 tests/vram_logger.ps1         Windows VRAM/RAM sampler
 docs/MODELS.md                full model catalog + fit-estimate methodology
 docs/MACOS.md                 macOS/Apple Silicon (rapid-mlx) — start here if you're on a Mac

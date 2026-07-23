@@ -195,8 +195,7 @@ MODELS = [
         "total_params_b": 9,
         "active_params_b": None,
         "reasoning": True,
-        "notes": "Dense, fully on GPU. Alibaba reports this beating much larger models "
-                 "on reasoning benchmarks.",
+        "notes": "Dense, fully on GPU. Largest dense model in this catalog.",
         "quants": [
             {"label": "Q4_K_M (recommended)", "file": "Qwen3.5-9B-Q4_K_M.gguf",
              "repo": "unsloth/Qwen3.5-9B-GGUF", "size_gb": 5.29, "default": True},
