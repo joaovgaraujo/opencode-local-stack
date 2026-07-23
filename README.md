@@ -97,7 +97,9 @@ for the per-model tok/s, context ceilings, and pass/fail.
 
 Full quant list and exact file sizes: [`docs/MODELS.md`](docs/MODELS.md).
 Independent benchmark scores per model (coding, reasoning, tool use):
-[`docs/BENCHMARKS.md`](docs/BENCHMARKS.md).
+[`docs/BENCHMARKS.md`](docs/BENCHMARKS.md). Measured throughput, 8 GB context
+fit, and CUDA-vs-Vulkan speed for all six models on one machine:
+[`docs/PERFORMANCE.md`](docs/PERFORMANCE.md).
 TurboQuant KV-cache compression and the experimental TQ3_1S weight format both
 need a community llama.cpp fork, so read [`docs/TURBOQUANT.md`](docs/TURBOQUANT.md)
 and [`docs/RESULTS.md`](docs/RESULTS.md) first.
@@ -134,6 +136,7 @@ tests/benchmark.py            llama-bench wrapper with VRAM/RSS caps (Linux/Wind
 tests/vram_logger.ps1         Windows VRAM/RAM sampler
 docs/MODELS.md                full model catalog + fit-estimate methodology
 docs/BENCHMARKS.md            independent benchmark scores per model (coding, reasoning, tool use)
+docs/PERFORMANCE.md           measured tok/s, 8 GB context fit, CUDA vs Vulkan (this machine)
 docs/MACOS.md                 macOS/Apple Silicon (rapid-mlx); start here if you're on a Mac
 docs/TURBOQUANT.md            experimental TurboQuant quant + community fork links
 docs/DEPLOY.md                manual usage, GPU backend selection, MoE re-tuning
