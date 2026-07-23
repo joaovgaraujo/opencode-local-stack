@@ -71,23 +71,58 @@ other way first, `install.py` just uses whatever's already on PATH.
 Apple Silicon has no discrete VRAM - the GPU and CPU share the same physical
 RAM. `catalog.mlx_fit_verdict()` models this as a single pool:
 
-- `need_ram ≈ quant size + 2.5 GB` (KV cache/activations - smaller than the
-  llama.cpp estimate since there's no separate GPU/CPU split to account for)
-- **fits**: `need_ram ≤ total_RAM × 0.75` (macOS's approximate default GPU
-  "wired memory" ceiling) and free RAM covers most of it too
+- `need_ram ≈ quant size + 4.5 GB` (KV cache/activations headroom for a
+  coding-agent workload - long prompts and multi-thousand-token outputs)
+- **fits**: `need_ram ≤ total_RAM × 0.65` and free RAM covers most of it too
 - **tight**: within 85% of that ceiling
 - **no**: otherwise
 
-The 75% figure is a commonly-cited default for how much of total unified
-memory macOS will let the GPU actually allocate; you can raise it yourself
-with `sudo sysctl iogpu.wired_limit_mb=<N>` if you want to push closer to
-100% (at real risk of OS instability if you go too far - this isn't
-something `install.py` does for you). Free RAM on macOS (`hw.ram_free_gb`)
-is a `vm_stat`-based approximation (free + inactive pages), not an exact
-"available" figure the way Windows/Linux report it - treat it as a rough
-signal, same spirit as everywhere else in this repo: these are heuristics
-for sorting the picker, not a guarantee. Measure your own machine after
-install.
+The 0.65 figure is not the raw "wired memory" ceiling - it's the budget
+rapid-mlx actually enforces at request time. The server admits a request only
+while `active weights + projected KV` stays under
+`gpu_memory_utilization (default 0.90) × Metal recommendedMaxWorkingSetSize`.
+On a 16 GB machine that working set is ~11.4 GB, so the effective ceiling for
+weights + KV is ~`0.90 × 0.72 ≈ 0.65` of total RAM. Cross it and you get an
+HTTP **503** - `"would exceed gpu_memory_utilization cap"` - not a hang. You
+can raise the working set with `sudo sysctl iogpu.wired_limit_mb=<N>` (at real
+risk of OS instability if you go too far - `install.py` never does this for
+you), or pass rapid-mlx a higher `--gpu-memory-utilization`.
+
+Before it starts the server, `install.py` runs a **memory preflight**
+(`hwdetect.macos_available_ram_gb()`, a fresh `vm_stat` read of free +
+inactive + speculative + purgeable pages): it aborts up front if there isn't
+even room to load the weights, and warns if there's room to load but not
+enough KV headroom for large requests. Free RAM on macOS is an approximation,
+not an exact "available" figure the way Windows/Linux report it - so these are
+heuristics for sorting the picker and catching obvious trouble early, not a
+guarantee. Measure your own machine after install.
+
+### Measured notes (16 GB Apple Silicon, rapid-mlx `0.10.15`)
+
+Numbers from an end-to-end run of `install.py` + `tests/validate.py`; tok/s
+never transfers between machines, so treat these as fit/behavior notes, not a
+benchmark:
+
+| Model (4bit MLX) | Resident footprint | Verdict on 16 GB | Notes |
+|---|---:|---|---|
+| **Qwen3.5-9B** | ~5.2 GB | **fits** (top pick) | Passed all four validation tests *and* the OpenCode agentic smoke test with ~5-6 GB of KV headroom to spare. This is what the picker now recommends first on a 16 GB machine. |
+| **Gemma 4 12B** | ~7.8 GB | **tight** | Loads and answers short prompts fine (chat, code-gen, tool-calling passed), but `max_tokens=8192` and the ~30k-token needle test both 503'd: `Metal active 7.3 GB + projected KV 6.5 GB > cap 11.4 GB`. Usable for light chat on 16 GB, not for long-context/agentic work - hence "tight", and no longer the default pick. |
+
+Two startup gotchas the installer now handles automatically:
+
+- **`rapid-mlx` version.** The `--kv-cache-turboquant <mode>` value form and
+  the `--pflash` flag are `0.10.x`-era; an older Homebrew/pipx `rapid-mlx`
+  (e.g. `0.6.x`, where `--kv-cache-turboquant` is a bare boolean) crashes with
+  `unrecognized arguments: k8v4`. The installer now version-checks any
+  `rapid-mlx` on `PATH` and falls back to the pinned `.rapidmlx-venv` when
+  it's too old, instead of trusting whatever `PATH` happens to resolve.
+- **PFlash + multimodal misclassification.** rapid-mlx auto-enables PFlash
+  (`--pflash always`) for verified Qwen3.5/3.6 aliases, then refuses to run it
+  once the model is (mis)classified as multimodal - and that check ignores
+  `--no-mllm`, so `serve` hard-exits with `"--pflash is not supported for
+  multimodal models"` before binding. The installer now passes `--pflash off`
+  on this path (the catalog is text-only, so nothing is lost), which keeps
+  startup reliable across every model.
 
 ## Model catalog
 

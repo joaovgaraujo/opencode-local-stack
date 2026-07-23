@@ -38,14 +38,25 @@ VRAM_RESERVE_GB = 1.0                # keep display/desktop and transient buffer
 RAM_RESERVE_GB = 2.0                 # avoid paging model data under ordinary desktop load
 
 # rapid-mlx / unified memory: everything (weights + KV cache + activations)
-# shares one pool with the OS. MLX_RAM_OVERHEAD_GB covers KV cache/activations
-# (smaller than the two-pool llama.cpp estimate since there's no separate
-# attention-on-GPU/experts-on-CPU split to account for). macOS also caps how
-# much of total RAM the GPU can actually allocate (the "wired memory limit",
-# historically ~65-75% of total unless raised via
-# `sudo sysctl iogpu.wired_limit_mb=N`) - MLX_USABLE_RAM_FRACTION models that.
-MLX_RAM_OVERHEAD_GB = 2.5
-MLX_USABLE_RAM_FRACTION = 0.75
+# shares one pool with the OS. MLX_RAM_OVERHEAD_GB covers KV cache/activations;
+# MLX_USABLE_RAM_FRACTION models the ceiling rapid-mlx actually enforces at
+# runtime, which is tighter than "total RAM": the server admits a request only
+# while (active weights + projected KV) stays under
+# `gpu_memory_utilization (0.90) * Metal recommendedMaxWorkingSetSize`. On a
+# 16 GB machine that working set is ~11.4 GB, so the effective budget for
+# weights+KV is ~0.90 * 0.72 ≈ 0.65 of total RAM - anything above it comes back
+# as HTTP 503 "would exceed gpu_memory_utilization cap", not a hang.
+#
+# These were 0.75 / 2.5 GB, which rated gemma-4-12b-4bit "fits" on 16 GB and
+# ranked it the #1 pick - but its ~7.3 GB of resident weights plus the KV a
+# real request projects (6.5 GB at max_tokens=8192) blew past the 11.4 GB cap,
+# so short-completion, the 30k needle, and the OpenCode agentic test all 503'd.
+# The values below re-rate that combo "tight" (qwen3.5-9b-4bit, which passed the
+# whole suite on 16 GB, stays "fits" and becomes the top pick instead). The KV
+# overhead is sized for a coding-agent workload (long prompts, multi-k outputs);
+# a chat-only user could run larger, hence "tight" rather than "no".
+MLX_RAM_OVERHEAD_GB = 4.5
+MLX_USABLE_RAM_FRACTION = 0.65
 
 CTX_PROFILES = {
     "moe":   {"primary": 65536, "conservative": 32768},

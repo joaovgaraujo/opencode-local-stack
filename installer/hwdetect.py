@@ -158,6 +158,35 @@ def _detect_ram_linux(hw):
         hw.ram_free_gb = int(avail_match.group(1)) / (1024 ** 2)
 
 
+def macos_available_ram_gb():
+    """A fresh vm_stat-based read of unified memory that could be handed to the
+    GPU right now (free + inactive + speculative + purgeable pages), in GB, or
+    None off macOS / on parse failure.
+
+    detect() caches ram_free_gb once at startup; a memory preflight run just
+    before `rapid-mlx serve` needs the value *now* (a large model may have been
+    downloaded in the meantime, or another app may have grabbed memory), so this
+    re-samples instead of reusing the cached figure."""
+    if platform.system() != "Darwin":
+        return None
+    r = _run(["vm_stat"])
+    if not (r and r.returncode == 0):
+        return None
+    page_size_match = re.search(r"page size of (\d+) bytes", r.stdout)
+    page_size = int(page_size_match.group(1)) if page_size_match else 4096
+    pages = 0
+    found = False
+    for label in ("Pages free", "Pages inactive", "Pages speculative",
+                  "Pages purgeable"):
+        m = re.search(rf"{label}:\s*(\d+)", r.stdout)
+        if m:
+            pages += int(m.group(1))
+            found = True
+    if not found:
+        return None
+    return pages * page_size / (1024 ** 3)
+
+
 def _detect_macos(hw):
     """Apple Silicon uses unified memory - there's no discrete VRAM, RAM *is*
     the GPU-accessible pool (see catalog.py's mlx_fit_verdict for how that

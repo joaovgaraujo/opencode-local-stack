@@ -254,6 +254,43 @@ def run_pipeline_llamacpp(model, quant, profile, hw, skip_tests=False, port=8080
     return {"report": report, "tests": test_results}
 
 
+def _mlx_memory_preflight(model, quant, log):
+    """Verify there's enough free unified memory to actually start the server,
+    measured *now* (after killing any prior server) rather than from detect()'s
+    startup snapshot.
+
+    rapid-mlx admits a request only while active weights + projected KV stay
+    under ~0.90 * the Metal working set, so a machine that's low on free memory
+    doesn't hang - it loads and then 503s the first real request. Catching that
+    here turns a confusing mid-validation failure into an upfront, actionable
+    message. This warns (and, when clearly too low, aborts) but never silently
+    proceeds into a run that can't succeed."""
+    free = hwdetect.macos_available_ram_gb()
+    weights = quant["size_gb"]
+    need = catalog.estimate_mlx_requirements(model, quant)
+    if free is None:
+        log(f"  [preflight] couldn't read free memory; need ~{need:.1f} GB "
+            f"(weights {weights:.1f} GB + KV/activations headroom). Continuing.")
+        return
+    log(f"  [preflight] free unified memory ~{free:.1f} GB; this model wants "
+        f"~{need:.1f} GB (weights {weights:.1f} GB + KV/activations headroom).")
+    # Hard floor: without room for the weights plus a minimal working margin the
+    # server cannot even load without heavy paging, and every request will 503.
+    hard_floor = weights + 1.5
+    if free < hard_floor:
+        die(f"Not enough free memory to start: ~{free:.1f} GB free, but "
+            f"{quant['repo']} needs at least ~{hard_floor:.1f} GB just to load "
+            f"its weights. Close other apps (a browser or another model server "
+            f"is the usual culprit), or re-run with a smaller model/quant "
+            f"(`python install.py --list-models`). Free memory is measured live, "
+            f"so freeing some and re-running is enough - the installer is idempotent.")
+    if free < need:
+        log(f"  [preflight] WARNING: only ~{free:.1f} GB free vs ~{need:.1f} GB "
+            f"wanted. Small requests will work, but long prompts or large "
+            f"max_tokens may come back as HTTP 503 (KV cache would exceed the "
+            f"Metal cap). Close some apps or pick a smaller quant for headroom.")
+
+
 def run_pipeline_mlx(model, quant, hw, skip_tests=False, port=8000, install_node=False,
                       stop_when_done=False, mlx_turboquant="k8v4", log=print,
                       progress=lambda *a: None):
@@ -271,6 +308,7 @@ def run_pipeline_mlx(model, quant, hw, skip_tests=False, port=8000, install_node
 
     log("=== 2/5 Starting rapid-mlx server ===")
     rapidmlx_setup.kill_existing(ROOT)
+    _mlx_memory_preflight(model, quant, log)
     args = rapidmlx_setup.build_serve_args(quant["repo"], port, mlx_turboquant)
     log(f"  rapid-mlx {' '.join(args)}  (first run downloads the model from Hugging Face)")
     proc = rapidmlx_setup.start_rapidmlx(exe, args, os.path.join(ROOT, "server.log"),
