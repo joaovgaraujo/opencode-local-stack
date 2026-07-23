@@ -3,23 +3,20 @@
 Run a local LLM on your own machine with the [OpenCode](https://opencode.ai)
 coding agent as the frontend. Works on Windows, Linux, and macOS/Apple Silicon.
 One command detects your hardware, downloads a model that fits, serves it, and
-validates the whole stack.
+validates the stack.
 
-The catalog has six small-to-mid models, from Qwen3.6-35B-A3B down to
-Qwen3.5-4B, each in several quantizations. The installer only shows the
-combinations that fit your GPU or unified memory.
+The catalog has six models, from Qwen3.6-35B-A3B down to Qwen3.5-4B, each in
+several quantizations. The installer shows only the combinations that fit your
+GPU or unified memory.
 
 Qwen3.6-35B-A3B is a mixture-of-experts model: 35B total parameters, 3B active.
 Its expert weights sit in system RAM (`--cpu-moe`) while attention and the KV
 cache stay on the GPU, so it runs in a few GB of VRAM. Measured 2.7 to 6.0 GB
 across 8k to 256k context on a 12 GB card (see
-[`docs/RESULTS.md`](docs/RESULTS.md)). The smaller dense models run entirely on
-the GPU.
+[`docs/RESULTS.md`](docs/RESULTS.md)). The dense models run entirely on the GPU.
 
 On Windows and Linux the engine is llama.cpp serving GGUF weights. On Apple
-Silicon it's rapid-mlx serving MLX weights. The macOS path is validated
-end-to-end on Apple Silicon and defaults to native TurboQuant K8V4 KV-cache
-compression. See [`docs/MACOS.md`](docs/MACOS.md).
+Silicon it's rapid-mlx serving MLX weights. See [`docs/MACOS.md`](docs/MACOS.md).
 
 ## Quick start
 
@@ -57,7 +54,7 @@ Node.js is required for OpenCode and is never installed without your say-so.
 The GUI checkbox and the `--install-node` flag opt into a first-party
 installer: winget on Windows, Homebrew on macOS, and on Linux the official
 nodejs.org tarball extracted into a project-local `./node` directory (no sudo,
-nothing touches the system - delete the directory to undo).
+nothing touches the system; delete the directory to undo).
 
 `install.py` is idempotent, so re-running it is safe.
 
@@ -65,21 +62,19 @@ nothing touches the system - delete the directory to undo).
 
 The RAM and VRAM columns below are conservative estimates from the fit
 heuristic in `installer/catalog.py`, not measurements. The exception is
-Qwen3.6-35B-A3B, which was measured on real hardware. See
-[`docs/RESULTS.md`](docs/RESULTS.md) for the llama.cpp `--cpu-moe` run and
-[`docs/TURBOQUANT.md`](docs/TURBOQUANT.md) for the 12 GB-class CUDA run, plus
-[`docs/MODELS.md`](docs/MODELS.md) for how the estimate is computed.
-Re-measure on your own machine with `tests/benchmark.py` before capacity
-planning.
+Qwen3.6-35B-A3B, which was measured on real hardware (see
+[`docs/RESULTS.md`](docs/RESULTS.md)). See [`docs/MODELS.md`](docs/MODELS.md)
+for how the estimate is computed. Re-measure on your own machine with
+`tests/benchmark.py` before capacity planning.
 
 | Model | Arch | Default quant | Est. VRAM | Est. RAM | Notes |
 |---|---|---:|---:|---:|---|
-| **Qwen3.6-35B-A3B** | MoE 35B/3B active | 20.6 GB | 2.7–6.0 GB (measured, `--cpu-moe`, 8k–256k ctx) | 21–22 GB (measured RSS) | See [`docs/RESULTS.md`](docs/RESULTS.md) for measured tok/s and [`docs/TURBOQUANT.md`](docs/TURBOQUANT.md) for TurboQuant results |
+| **Qwen3.6-35B-A3B** | MoE 35B/3B active | 20.6 GB | 2.7–6.0 GB (measured, `--cpu-moe`, 8k–256k ctx) | 21–22 GB (measured RSS) | See [`docs/RESULTS.md`](docs/RESULTS.md) for measured tok/s |
 | **Gemma 4 26B-A4B** | MoE 26B/4B active | 15.8 GB | 3.8–4.5 GB (est.) | 19.8 GB (est.) | Same `--cpu-moe` trick, lighter RAM footprint |
 | **Gemma 4 12B (Unified)** | Dense | 6.6 GB | 8.1–9.1 GB (est.) | ~3 GB (est.) | Needs a 12 GB-class GPU; measured not to fit 8 GB even at 8k ctx (see [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md)) |
 | **Qwen3.5-9B** | Dense | 5.3 GB | 6.8–7.8 GB (est.) | ~3 GB (est.) | Largest dense model in the catalog |
-| **Gemma 4 E4B** | Dense | 4.6 GB | 6.1–7.1 GB (est.) | ~3 GB (est.) | Smallest Gemma 4 text model |
-| **Qwen3.5-4B** | Dense | 2.6 GB | 4.1–5.1 GB (est.) | ~3 GB (est.) | Runs on almost anything, including CPU-only |
+| **Gemma 4 E4B** | Dense | 4.6 GB | 6.1–7.1 GB (est.) | ~3 GB (est.) | |
+| **Qwen3.5-4B** | Dense | 2.6 GB | 4.1–5.1 GB (est.) | ~3 GB (est.) | |
 
 MoE VRAM stays roughly flat across quant sizes because the experts live in
 system RAM. Dense VRAM scales with quant size. On macOS each model also ships
@@ -89,20 +84,17 @@ VRAM/RAM split (see [`docs/MACOS.md`](docs/MACOS.md)).
 On Apple Silicon the picker chooses by memory tier: qwen3.5-4b at 8 GB,
 qwen3.5-9b at 16 GB, gemma-4-12b at 24 GB, qwen3.6-35b-a3b at 32 GB and up (the
 tier table is in [`docs/MACOS.md`](docs/MACOS.md)). Fitting in memory is not the
-same as driving OpenCode: measured on a 16 GB M4, qwen3.5-9b is the smallest
-Qwen that completes the agentic smoke test (2B and 4B print code instead of
-calling tools, even at 8-bit), while Gemma's edge models tool-call at 2B. See
+same as driving OpenCode. Measured on a 16 GB M4, qwen3.5-9b is the smallest
+Qwen that passes the agentic smoke test (2B and 4B print code instead of calling
+tools, even at 8-bit), while Gemma's edge models tool-call at 2B. See
 [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md#local-measurements-on-a-16-gb-apple-m4)
-for the per-model tok/s, context ceilings, and pass/fail.
+for per-model tok/s, context ceilings, and pass/fail.
 
 Full quant list and exact file sizes: [`docs/MODELS.md`](docs/MODELS.md).
 Independent benchmark scores per model (coding, reasoning, tool use):
 [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md). Measured throughput, 8 GB context
 fit, and CUDA-vs-Vulkan speed for all six models on one machine:
 [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md).
-TurboQuant KV-cache compression and the experimental TQ3_1S weight format both
-need a community llama.cpp fork, so read [`docs/TURBOQUANT.md`](docs/TURBOQUANT.md)
-and [`docs/RESULTS.md`](docs/RESULTS.md) first.
 
 ## Good to know
 
@@ -138,7 +130,6 @@ docs/MODELS.md                full model catalog + fit-estimate methodology
 docs/BENCHMARKS.md            independent benchmark scores per model (coding, reasoning, tool use)
 docs/PERFORMANCE.md           measured tok/s, 8 GB context fit, CUDA vs Vulkan (this machine)
 docs/MACOS.md                 macOS/Apple Silicon (rapid-mlx); start here if you're on a Mac
-docs/TURBOQUANT.md            experimental TurboQuant quant + community fork links
 docs/DEPLOY.md                manual usage, GPU backend selection, MoE re-tuning
 ```
 
