@@ -23,7 +23,7 @@ What it does (idempotent - safe to re-run):
      own weights on first `serve`.
   4. Starts the server, waits for it to become healthy, checks the /v1/models
      alias.
-  5. Runs tests/validate.py and logs peak VRAM/RAM (unless --skip-tests).
+  5. Runs tests/validate.py (unless --skip-tests).
   6. Installs OpenCode, writes opencode.json, runs an agentic smoke test.
   7. Writes RESULTS.md.
 
@@ -58,9 +58,13 @@ def gguf_is_valid(path):
         return False
 
 
-def verify_download_size(quant, path, log):
-    """Best-effort size check against the HF API - never blocks install if
-    the API call fails (e.g. no internet after the file was already there)."""
+def verify_download_size(quant, path, log, fatal=True):
+    """Best-effort size check against the HF API.
+
+    Return ``True`` when the known size matches, ``False`` for a known
+    mismatch, and ``None`` when the API cannot be reached. Existing valid
+    GGUFs remain usable offline, while known partial files can be resumed.
+    """
     try:
         url = f"https://huggingface.co/api/models/{quant['repo']}/tree/main"
         req = urllib.request.Request(url, headers={"User-Agent": "opencode-local-installer"})
@@ -69,11 +73,19 @@ def verify_download_size(quant, path, log):
         expected = next((e["size"] for e in entries if e.get("path") == quant["file"]), None)
         actual = os.path.getsize(path)
         if expected and actual != expected:
-            die(f"GGUF size mismatch for {quant['file']} (have {actual}, expect {expected}). "
-                f"Re-run install.py to resume the download.")
-        log(f"  model verified: size matches Hugging Face ({actual / 1e9:.1f} GB)")
+            message = (f"GGUF size mismatch for {quant['file']} (have {actual}, expect "
+                       f"{expected}).")
+            if fatal:
+                die(message + " Re-run install.py to resume the download.")
+            log(f"  {message} Resuming the partial download.")
+            return False
+        if expected:
+            log(f"  model verified: size matches Hugging Face ({actual / 1e9:.1f} GB)")
+            return True
+        return None
     except (OSError, ValueError, urllib.error.URLError) as e:
         log(f"  size check skipped ({e})")
+        return None
 
 
 def ensure_llamacpp(bin_dir, backend, log, progress):
@@ -83,7 +95,10 @@ def ensure_llamacpp(bin_dir, backend, log, progress):
         return os.path.dirname(existing)
 
     log(f"Downloading prebuilt llama.cpp release (backend={backend}, os={platform.system()})")
-    assets = download.resolve_llamacpp_assets(backend, platform.system())
+    try:
+        assets = download.resolve_llamacpp_assets(backend, platform.system())
+    except (OSError, RuntimeError, urllib.error.URLError) as e:
+        die(f"Could not resolve a prebuilt llama.cpp runtime: {e}")
     os.makedirs(bin_dir, exist_ok=True)
 
     def dl(asset, label):
@@ -119,9 +134,18 @@ def ensure_model(model, quant, model_path, log, progress):
         os.makedirs(model_dir, exist_ok=True)
         model_path = os.path.join(model_dir, quant["file"])
     if os.path.exists(model_path) and gguf_is_valid(model_path):
-        log(f"Using existing model file: {model_path}")
-        verify_download_size(quant, model_path, log)
-        return model_path
+        size_ok = verify_download_size(quant, model_path, log, fatal=False)
+        if size_ok is not False:
+            log(f"Using existing model file: {model_path}")
+            return model_path
+        part_path = model_path + ".part"
+        if os.path.exists(part_path):
+            if os.path.getsize(model_path) > os.path.getsize(part_path):
+                os.replace(model_path, part_path)
+            else:
+                os.remove(model_path)
+        else:
+            os.replace(model_path, part_path)
 
     log(f"Downloading {quant['file']} ({quant['size_gb']:.1f} GB) from {quant['repo']}")
     url = catalog.download_url(quant)
@@ -138,18 +162,37 @@ def ensure_model(model, quant, model_path, log, progress):
 
 def run_pipeline_llamacpp(model, quant, profile, hw, skip_tests=False, port=8080, bin_dir=None,
                           model_path=None, install_node=False, stop_when_done=False,
+                          backend=None, extra_server_args=None,
                           log=print, progress=lambda *a: None):
     """The GGUF/llama.cpp install pipeline (Windows/Linux), shared by the CLI
     and GUI front-ends. See run_pipeline_mlx for the macOS/Apple Silicon
     counterpart."""
     report = {}
-    if quant.get("engine") == "turboquant":
-        log("TurboQuant weights selected. This installer downloads the weights only - it "
-            "will NOT auto-download or run a third-party llama.cpp binary. Build a "
-            "TurboQuant-enabled fork yourself and pass --bin-dir to that build. "
-            "See docs/TURBOQUANT.md.")
+    extra_server_args = list(extra_server_args or [])
+    is_turboquant = quant.get("engine") == "turboquant"
+    if is_turboquant:
+        if backend is None:
+            die("TurboQuant uses a custom runtime whose backend cannot be inferred. "
+                "Pass its real backend explicitly, for example --backend cuda, together "
+                "with --bin-dir; see docs/TURBOQUANT.md.")
+        if not bin_dir:
+            die("TurboQuant weights require a reviewed TQ-enabled llama.cpp build. "
+                "Pass --bin-dir /path/to/that/build and the build's real backend with "
+                "--backend. Stock llama.cpp cannot load TQ3_1S; see docs/TURBOQUANT.md.")
+        if not os.path.isdir(bin_dir) or not server.find_server_binary(bin_dir):
+            die(f"TurboQuant requires --bin-dir to contain a llama-server binary; none "
+                f"was found under {bin_dir!r}. Build or install a reviewed TQ-enabled "
+                "fork there first. This installer never downloads a third-party runtime; "
+                "see docs/TURBOQUANT.md.")
+        log("TurboQuant weights selected. Using the explicitly supplied third-party "
+            "runtime; this installer never downloads one automatically.")
 
-    backend = hwdetect.pick_llamacpp_backend(hw)
+    backend = backend or hwdetect.pick_llamacpp_backend(hw)
+    if platform.system() == "Linux" and backend == "cuda":
+        if not bin_dir or not os.path.isdir(bin_dir) or not server.find_server_binary(bin_dir):
+            die("Linux CUDA requires a source-built llama-server because official llama.cpp "
+                "releases do not provide a Linux CUDA binary. Pass both --backend cuda and "
+                "--bin-dir /path/to/build/bin; see docs/DEPLOY.md.")
     bin_dir = bin_dir or os.path.join(ROOT, "llama.cpp")
     report["Backend"] = backend
     report["Hardware"] = "; ".join(hw.summary_lines())
@@ -161,15 +204,17 @@ def run_pipeline_llamacpp(model, quant, profile, hw, skip_tests=False, port=8080
     resolved_model_path = ensure_model(model, quant, model_path, log, progress)
 
     log("=== 3/6 Starting llama-server ===")
-    server.kill_existing_server()
+    server.kill_existing_server(ROOT)
     ctx = catalog.ctx_sizes(model)[profile]
-    args = server.build_server_args(model, quant, resolved_model_path, port, profile, backend=backend)
+    args = server.build_server_args(model, quant, resolved_model_path, port, profile,
+                                    backend=backend, extra_args=extra_server_args)
     log(f"  llama-server {' '.join(args)}")
     proc = server.start_server(os.path.join(resolved_bin_dir, server.server_exe_name()), args,
-                                os.path.join(ROOT, "server.log"), os.path.join(ROOT, "server.err"))
+                               os.path.join(ROOT, "server.log"), os.path.join(ROOT, "server.err"),
+                               root=ROOT)
     log("  waiting for /health ...")
-    if not server.wait_for_health(port):
-        die("Server did not become healthy - see server.log / server.err")
+    if not server.wait_for_health(port, process=proc):
+        die("Server did not become healthy (or exited during startup) - see server.log / server.err")
     alias = server.get_served_alias(port)
     if alias != model["id"]:
         die(f"/v1/models reports '{alias}', expected '{model['id']}'")
@@ -181,7 +226,8 @@ def run_pipeline_llamacpp(model, quant, profile, hw, skip_tests=False, port=8080
     opencode_json = os.path.join(ROOT, "opencode.json")
     server.write_opencode_json(opencode_json, model, port, ctx)
     server.write_run_scripts(ROOT, resolved_bin_dir, resolved_model_path, model["id"],
-                              model["arch"], port, ctx, "q8_0", backend)
+                              model["arch"], port, ctx, "q8_0", backend,
+                              extra_args=extra_server_args)
     log("  opencode.json, run.ps1, run.sh written")
 
     log("=== 5/6 Validation ===")
@@ -199,7 +245,7 @@ def run_pipeline_llamacpp(model, quant, profile, hw, skip_tests=False, port=8080
 
     if stop_when_done:
         log("Stopping server (--stop-when-done)")
-        server.kill_existing_server()
+        server.kill_existing_server(ROOT)
     else:
         log(f"Server left running on http://127.0.0.1:{port}/v1 (pid {proc.pid})")
 
@@ -355,6 +401,12 @@ def parse_args():
     p.add_argument("--port", type=int, default=None,
                     help="default 8080 for llama.cpp, 8000 for rapid-mlx")
     p.add_argument("--bin-dir", default=None, help="llama.cpp only: reuse an existing llama.cpp folder")
+    p.add_argument("--backend", choices=["auto", "cuda", "vulkan", "rocm", "cpu"],
+                    default="auto", help="llama.cpp backend; auto uses hardware/OS defaults. "
+                                         "Use cuda with a custom Linux CUDA --bin-dir")
+    p.add_argument("--extra-server-arg", action="append", default=[], metavar="ARG",
+                    help="llama.cpp only: append and persist one server argument; repeat as needed. "
+                         "Use --extra-server-arg=--flag for values beginning with a dash")
     p.add_argument("--model-path", default=None,
                     help="llama.cpp only: reuse an existing GGUF instead of downloading")
     p.add_argument("--skip-tests", action="store_true")
@@ -436,13 +488,18 @@ def _dispatch(model, quant, profile, hw, engine, port, args, skip_tests, log, pr
     so a caller can't accidentally send an mlx-shaped quant down the
     llama.cpp path by passing a profile."""
     if engine == "rapidmlx":
+        if args.backend != "auto" or args.extra_server_arg:
+            die("--backend and --extra-server-arg apply only to llama.cpp (Windows/Linux), "
+                "not the macOS Rapid-MLX engine.")
         run_pipeline_mlx(model, quant, hw, skip_tests=skip_tests, port=port,
                           install_node=args.install_node, stop_when_done=args.stop_when_done,
                           log=log, progress=progress)
     else:
+        selected_backend = (None if args.backend == "auto" else args.backend)
         run_pipeline_llamacpp(model, quant, profile, hw, skip_tests=skip_tests, port=port,
                               bin_dir=args.bin_dir, model_path=args.model_path,
                               install_node=args.install_node, stop_when_done=args.stop_when_done,
+                              backend=selected_backend, extra_server_args=args.extra_server_arg,
                               log=log, progress=progress)
 
 

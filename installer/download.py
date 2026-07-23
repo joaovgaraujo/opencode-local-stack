@@ -86,7 +86,13 @@ def download_file(url, dest_path, progress_cb=None, resume=True):
         else:
             mode = "ab" if existing else "wb"
 
-        total = existing + int(resp.headers.get("Content-Length", 0) or 0)
+        content_length = int(resp.headers.get("Content-Length", 0) or 0)
+        content_range = resp.headers.get("Content-Range", "")
+        range_total = content_range.rsplit("/", 1)[-1]
+        if "/" in content_range and range_total.isdigit():
+            total = int(range_total)
+        else:
+            total = existing + content_length if content_length else 0
         done = existing
         chunk_size = 1024 * 1024
         os.makedirs(os.path.dirname(os.path.abspath(dest_path)) or ".", exist_ok=True)
@@ -100,6 +106,9 @@ def download_file(url, dest_path, progress_cb=None, resume=True):
                 if progress_cb:
                     progress_cb(done, total)
 
+    if total and done != total:
+        raise OSError(f"Incomplete download for {os.path.basename(dest_path)}: "
+                      f"received {done} of {total} bytes")
     os.replace(tmp_path, dest_path)
 
 
@@ -112,14 +121,16 @@ def _check_safe_path(name, dest_dir, dest_real):
 
 
 def extract_archive(archive_path, dest_dir):
-    """Extract a .zip or .tar.gz release asset into dest_dir. Validates every
-    entry before extracting anything: rejects path traversal ('../', absolute
-    paths) for both formats, and additionally rejects symlink/hardlink members
-    in tar archives (a symlink entry can point outside dest_dir, then a later
-    member written "through" it lands wherever the link points - checking
-    each name's own path in isolation, as zip-slip protection normally does,
-    doesn't catch that). A llama.cpp release archive has no legitimate reason
-    to contain symlinks, so rejecting them outright costs nothing."""
+    """Extract a .zip or .tar.gz release asset into dest_dir.
+
+    Validate every entry before extracting anything. Regular entries reject
+    path traversal, while tar symlinks are allowed only when they are relative
+    links that stay inside the destination and do not contain ``..`` path
+    components. This supports the relative shared-library links shipped by
+    llama.cpp without allowing an archive to redirect extraction outside the
+    destination. Hardlinks remain rejected because they are not needed by the
+    release assets and are harder to validate safely across archive orderings.
+    """
     os.makedirs(dest_dir, exist_ok=True)
     dest_real = os.path.realpath(dest_dir)
     if archive_path.endswith(".zip"):
@@ -131,10 +142,18 @@ def extract_archive(archive_path, dest_dir):
         with tarfile.open(archive_path) as tf:
             members = tf.getmembers()
             for m in members:
-                if m.issym() or m.islnk():
-                    raise RuntimeError(f"Refusing to extract symlink/hardlink archive "
-                                        f"entry: {m.name!r} -> {m.linkname!r}")
                 _check_safe_path(m.name, dest_dir, dest_real)
+                if m.islnk():
+                    raise RuntimeError(f"Refusing to extract hardlink archive "
+                                       f"entry: {m.name!r} -> {m.linkname!r}")
+                if m.issym():
+                    link_parts = m.linkname.replace("\\", "/").split("/")
+                    if os.path.isabs(m.linkname) or ".." in link_parts:
+                        raise RuntimeError(f"Refusing to extract unsafe symlink archive "
+                                            f"entry: {m.name!r} -> {m.linkname!r}")
+                    link_target = os.path.normpath(os.path.join(
+                        os.path.dirname(m.name), m.linkname))
+                    _check_safe_path(link_target, dest_dir, dest_real)
             tf.extractall(dest_dir, members=members)
     else:
         raise RuntimeError(f"Don't know how to extract: {archive_path}")

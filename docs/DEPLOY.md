@@ -22,8 +22,8 @@ automatically. Either way it:
 2. Shows the model/quant catalog filtered and sorted by what plausibly fits
    (see [`MODELS.md`](MODELS.md) for how the fit estimate works).
 3. Downloads (or reuses) a matching llama.cpp release and the GGUF.
-4. Starts the server, waits for `/health`, runs `tests/validate.py`, measures
-   peak VRAM/RAM, sets up OpenCode, runs an agentic smoke test.
+4. Starts the server, waits for `/health`, runs `tests/validate.py`, sets up
+   OpenCode, and runs an agentic smoke test.
 5. Writes `RESULTS.md`.
 
 For a scripted/unattended install (CI, a second machine, whatever), skip the
@@ -34,9 +34,14 @@ python install.py --model qwen3.6-35b-a3b --quant Qwen3.6-35B-A3B-UD-Q4_K_M.gguf
 python install.py --list-models     # see every model id / quant filename
 ```
 
-Useful flags (same on both OSes): `--profile conservative` (smaller context,
-more headroom), `--skip-tests`, `--model-path <existing.gguf>`, `--bin-dir
-<existing llama.cpp folder>`, `--port <N>`, `--stop-when-done`.
+Useful flags: `--profile conservative` (smaller context, more headroom),
+`--skip-tests`, `--model-path <existing.gguf>`, `--bin-dir <existing llama.cpp
+folder>`, `--backend auto|cuda|vulkan|rocm|cpu`, `--port <N>`, and
+`--stop-when-done`. Repeat `--extra-server-arg` to append one llama-server
+argument and persist it in `run.ps1`/`run.sh`. An argument beginning with `-`
+must use the equals form (`--extra-server-arg=--cont-batching`); provide its
+value separately (`--extra-server-arg=--threads --extra-server-arg 16`).
+These llama.cpp-only flags are rejected on the macOS Rapid-MLX path.
 
 Node.js (required for OpenCode) is never installed silently. If it's missing,
 `install.py` prints the right command for your OS and stops — pass
@@ -67,7 +72,7 @@ Generated on first run (git-ignored, not in the repo):
 llama.cpp/          prebuilt llama.cpp release matching your OS + GPU backend (llama.cpp engine only)
 models/*.gguf        the model weights (llama.cpp engine only - rapid-mlx downloads its own)
 run.ps1 / run.sh     restart script for whatever you last installed (macOS gets run.sh only)
-RESULTS.md           per-machine pass/fail + measured VRAM/RAM
+RESULTS.md           per-machine pass/fail summary
 ```
 
 ## Manual usage (without the installer)
@@ -85,7 +90,7 @@ Both take overrides: `run.ps1 -Port 8081 -CtxSize 32768` /
 
 Point OpenCode at it by hand:
 ```
-npm install -g opencode-ai@latest @ai-sdk/openai-compatible
+npm install -g opencode-ai@1.18.4 @ai-sdk/openai-compatible@3.0.14
 # Windows: copy .\opencode.json "$env:USERPROFILE\.config\opencode\opencode.json"
 # Linux:   cp ./opencode.json ~/.config/opencode/opencode.json
 opencode      # then /models -> pick the local one
@@ -102,7 +107,7 @@ guessing.
 
 | OS | GPU | Backend chosen | Notes |
 |---|---|---|---|
-| Windows | NVIDIA | `cuda` | prebuilt `win-cuda-12.4-x64` release + cudart |
+| Windows | NVIDIA | `cuda` | official prebuilt Windows CUDA release + cudart |
 | Windows | AMD | `rocm` (HIP) | prebuilt `win-hip-radeon-x64` release |
 | Windows | other/unknown | `vulkan` | prebuilt `win-vulkan-x64` release |
 | Windows | none detected | `cpu` | prebuilt `win-cpu-x64` release |
@@ -124,7 +129,14 @@ git clone https://github.com/ggml-org/llama.cpp
 cmake -B build -DGGML_CUDA=ON -DCMAKE_BUILD_TYPE=Release
 cmake --build build --config Release -j
 ```
-Then re-run `install.py --bin-dir ./llama.cpp/build/bin ...` to use it.
+Then re-run with both the custom binary directory and its real backend:
+```bash
+python install.py --model qwen3.5-4b --non-interactive \
+    --backend cuda --bin-dir ./llama.cpp/build/bin
+```
+`--bin-dir` prevents a runtime download when it contains `llama-server`;
+`--backend cuda` ensures the report and generated launchers reflect the custom
+CUDA runtime rather than Linux's automatic Vulkan choice.
 
 ## Re-tune expert offload (MoE models only)
 
@@ -154,9 +166,11 @@ VRAM + faster):
 - `--no-mmap` forces experts fully resident in RAM (skips the page cache) if
   prompt ingestion feels I/O-stalled; usually unnecessary with mmap and
   enough free RAM.
-- One server instance at a time — `install.py` kills any existing
-  `llama-server` before starting a new one (`taskkill /IM llama-server.exe /F`
-  on Windows, `pkill -f llama-server` on Linux).
+- One server instance per repository-managed install. `install.py` records the
+  exact PID and resolved executable path in `.llama-server.pid`, and only stops
+  that verified process on a later run. It does not use global `pkill` or
+  image-name `taskkill`, so llama-server instances from other projects are
+  left alone.
 - Frontend is **OpenCode only**. Open WebUI was intentionally not set up.
 - Gemma 4's jinja chat template has known thinking/tool-call interplay quirks
   on some llama.cpp builds — if you see garbled tool calls or `reasoning_content`

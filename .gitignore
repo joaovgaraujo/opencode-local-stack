@@ -19,6 +19,7 @@ server.out
 install-run.log
 run.log
 tests/vram.log
+benchmark-results/
 opencode-scratch/
 RESULTS.md
 # legacy name, kept ignored for anyone re-running an old checkout
@@ -30,11 +31,15 @@ __pycache__/
 # macOS Rapid-MLX runtime created by install.py
 .rapidmlx-venv/
 .rapidmlx.pid
+# Project-scoped llama.cpp lifecycle state
+.llama-server.pid
 
 # --- OS / editor cruft ---
 Thumbs.db
 .DS_Store
 *.swp
 
-# --- Local agent/tooling state (not part of this project) ---
+# --- Local secrets and agent/tooling state (not part of this project) ---
+.env
+vendor/
 .claude/

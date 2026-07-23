@@ -40,13 +40,14 @@ Silicon), stdlib-only (no `pip install` needed for the installer itself), and:
    sorted by whether it *fits*, is a *tight fit*, or *won't fit* on your
    machine.
 3. **Downloads** a matching prebuilt llama.cpp release + the GGUF you picked
-   (or reuses ones you already have) — on macOS, installs rapid-mlx instead,
-   which downloads its own MLX weights on first run.
-4. **Starts the server**, waits for it to become healthy, runs the validation
+   (or reuses ones you already have) — on macOS, installs pinned rapid-mlx in
+   a project-local virtual environment instead, and rapid-mlx downloads its
+   own MLX weights on first run.
+4. **Starts the server**, waits for it to become healthy, and runs the validation
    suite (short completion, code-gen, tool-calling, 30k-token
-   needle-in-haystack), and logs peak VRAM/RAM.
-5. **Sets up OpenCode** — installs it, writes `opencode.json`, runs an
-   agentic smoke test (writes + runs a Python file).
+   needle-in-haystack).
+5. **Sets up OpenCode** — installs pinned packages, writes `opencode.json`, and
+   runs an agentic smoke test (writes + runs a Python file).
 6. **Writes `RESULTS.md`** with a pass/fail summary for your machine.
 
 ```
@@ -55,6 +56,17 @@ python install.py --model qwen3.5-9b --profile primary --non-interactive
 python install.py --cli                      # force the text wizard (no GUI)
 python install.py --skip-tests               # just stand up the server
 ```
+
+On Linux/NVIDIA, automatic installs use the official Vulkan prebuilt. To use
+a CUDA build you compiled yourself, select its real backend explicitly:
+```
+python install.py --model qwen3.5-4b --non-interactive \
+    --backend cuda --bin-dir ./llama.cpp/build/bin
+```
+Repeat `--extra-server-arg` to preserve fork-specific options in both generated
+launchers. Values beginning with `-` must use the equals form, for example
+`--extra-server-arg=--cont-batching`; pass a separate value as another token,
+for example `--extra-server-arg=--threads --extra-server-arg 16`.
 
 Idempotent — safe to re-run. Node.js (required for OpenCode) is never
 installed silently; if it's missing, `install.py` prints the install command
@@ -99,10 +111,13 @@ build the installer downloads).
   re-measure on your own hardware with `tests/validate.py` +
   `tests/vram_logger.ps1` (or an `nvidia-smi -l` loop on Linux).
 - **First OpenCode run needs internet** — it downloads `ripgrep` once.
-- **Linux + NVIDIA defaults to a Vulkan build**, not CUDA — llama.cpp doesn't
-  publish a prebuilt Linux CUDA binary. See
-  [`docs/DEPLOY.md`](docs/DEPLOY.md#linux--nvidia-vulkan-vs-building-cuda-from-source)
-  for building CUDA from source if you want the extra performance.
+- **Linux + NVIDIA defaults to an official Vulkan prebuilt**, not CUDA,
+  because llama.cpp doesn't publish a prebuilt Linux CUDA binary. A custom
+  CUDA build is supported with `--backend cuda --bin-dir <build/bin>`; see
+  [`docs/DEPLOY.md`](docs/DEPLOY.md#linux--nvidia-vulkan-vs-building-cuda-from-source).
+- **Memory is not measured by `install.py` yet.** Use `tests/vram_logger.ps1`
+  on Windows or sample `nvidia-smi` plus the server process RSS on Linux while
+  `tests/validate.py` runs; idle allocation is not a trustworthy peak.
 
 ## Repo layout
 
@@ -123,7 +138,7 @@ docs/RESULTS.md               historical validated results (Qwen3.6, primary pro
 
 Generated on first run (git-ignored): `llama.cpp/` (the runtime), `models/*.gguf`
 (the weights), `run.ps1` / `run.sh` (restart the last server without the
-wizard), `RESULTS.md` (your machine's pass/fail + measured VRAM/RAM).
+wizard), `RESULTS.md` (your machine's pass/fail summary).
 
 ## Credits
 

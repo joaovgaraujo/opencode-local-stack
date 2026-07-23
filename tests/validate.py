@@ -48,7 +48,7 @@ def record(name, passed, detail, meta=None):
 # --- Test 1: short completion ---
 try:
     j, m = chat([{"role": "user", "content": "Answer in one short sentence: why is the sky blue?"}],
-                max_tokens=2048)
+                max_tokens=8192)
     txt = j["choices"][0]["message"]["content"].strip()
     ok = len(txt) > 15 and any(w in txt.lower() for w in ["scatter", "light", "blue", "wavelength"])
     record("short-completion", ok, repr(txt[:160]), m)
@@ -59,7 +59,7 @@ except Exception as e:
 try:
     j, m = chat([{"role": "user", "content": "Write a Python function `fib(n)` that returns the nth "
                   "Fibonacci number. Include a docstring. Reply with only a ```python code block."}],
-                max_tokens=2048)
+                max_tokens=3072)
     txt = j["choices"][0]["message"]["content"]
     code = txt.split("```python")[1].split("```")[0] if "```python" in txt else \
            (txt.split("```")[1].split("```")[0] if "```" in txt else txt)
@@ -81,7 +81,7 @@ try:
             "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]}},
             "required": ["location"]}}}]
     j, m = chat([{"role": "user", "content": "What's the weather in Paris right now? Use the tool."}],
-                tools=tools, tool_choice="auto", max_tokens=200)
+                tools=tools, tool_choice="auto", max_tokens=4096)
     msg = j["choices"][0]["message"]
     tcs = msg.get("tool_calls") or []
     ok = False; detail = "no tool_calls emitted"

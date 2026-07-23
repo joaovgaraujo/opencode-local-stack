@@ -25,8 +25,11 @@ def find_server_binary(bin_dir):
     return None
 
 
-def build_server_args(model, quant, model_path, port, profile, kv_type="q8_0", backend="cuda"):
+def build_server_args(model, quant, model_path, port, profile, kv_type="q8_0", backend=None,
+                      extra_args=None):
     from . import catalog
+    if backend not in {"cuda", "vulkan", "rocm", "cpu"}:
+        raise ValueError(f"backend must be resolved before building server arguments: {backend!r}")
     ctx = catalog.ctx_sizes(model)[profile]
     args = [
         "-m", model_path,
@@ -45,29 +48,100 @@ def build_server_args(model, quant, model_path, port, profile, kv_type="q8_0", b
         args += ["--n-gpu-layers", "999"]
         if model["arch"] == "moe":
             args += ["--cpu-moe"]
-    return args
+    return args + list(extra_args or [])
 
 
-def kill_existing_server():
-    """Best-effort: stop any llama-server left running from a previous run."""
+PID_FILE_NAME = ".llama-server.pid"
+
+
+def _pid_path(root):
+    return os.path.join(root, PID_FILE_NAME)
+
+
+def _remove_pid_file(root):
+    try:
+        os.remove(_pid_path(root))
+    except OSError:
+        pass
+
+
+def _running_executable(pid):
+    """Return the executable path for pid, or None if it cannot be verified."""
+    if platform.system() == "Windows":
+        command = ("(Get-CimInstance Win32_Process -Filter 'ProcessId = "
+                   f"{pid}' -ErrorAction SilentlyContinue).ExecutablePath")
+        try:
+            result = subprocess.run(["powershell", "-NoProfile", "-Command", command],
+                                    capture_output=True, text=True, encoding="utf-8",
+                                    errors="replace", timeout=5)
+            return result.stdout.strip() or None
+        except (OSError, subprocess.SubprocessError):
+            return None
+    proc_exe = f"/proc/{pid}/exe"
+    try:
+        return os.path.realpath(proc_exe) if os.path.exists(proc_exe) else None
+    except OSError:
+        return None
+
+
+def kill_existing_server(root):
+    """Stop only the llama-server previously started by this repository.
+
+    A PID alone can be stale and reused, so the PID file also records the
+    resolved executable path. The process is terminated only when its current
+    executable still matches; unrelated llama-server instances are untouched.
+    """
+    try:
+        with open(_pid_path(root), encoding="utf-8") as handle:
+            lines = handle.read().splitlines()
+        pid = int(lines[0])
+        expected_executable = os.path.realpath(lines[1])
+    except (OSError, ValueError, IndexError):
+        return
+
+    actual_executable = _running_executable(pid)
+    same_executable = (actual_executable is not None and
+                       os.path.normcase(os.path.realpath(actual_executable)) ==
+                       os.path.normcase(expected_executable))
+    if not same_executable:
+        _remove_pid_file(root)
+        return
+
     try:
         if platform.system() == "Windows":
-            subprocess.run(["taskkill", "/IM", "llama-server.exe", "/F"],
-                            capture_output=True, timeout=15)
+            subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"],
+                           capture_output=True, timeout=15)
         else:
-            subprocess.run(["pkill", "-f", "llama-server"], capture_output=True, timeout=15)
+            import signal
+            os.kill(pid, signal.SIGTERM)
+            for _ in range(25):
+                if _running_executable(pid) is None:
+                    break
+                time.sleep(0.2)
+            else:
+                os.kill(pid, signal.SIGKILL)
     except (OSError, subprocess.SubprocessError):
         pass
+    finally:
+        _remove_pid_file(root)
     time.sleep(1)
 
 
-def start_server(server_bin, args, log_out_path, log_err_path):
+def start_server(server_bin, args, log_out_path, log_err_path, root=None):
     out_f = open(log_out_path, "wb")
     err_f = open(log_err_path, "wb")
     popen_kwargs = {}
     if platform.system() == "Windows":
         popen_kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
-    proc = subprocess.Popen([server_bin] + args, stdout=out_f, stderr=err_f, **popen_kwargs)
+    try:
+        proc = subprocess.Popen([server_bin] + args, stdout=out_f, stderr=err_f,
+                                **popen_kwargs)
+    finally:
+        out_f.close()
+        err_f.close()
+    if root:
+        with open(_pid_path(root), "w", encoding="utf-8") as handle:
+            handle.write(f"{proc.pid}\n{os.path.realpath(server_bin)}\n")
     return proc
 
 
@@ -148,7 +222,8 @@ def _sh_quoted(s):
     return shlex.quote(s)
 
 
-def write_run_scripts(root, bin_dir, model_path, model_id, arch, port, ctx, kv_type, backend):
+def write_run_scripts(root, bin_dir, model_path, model_id, arch, port, ctx, kv_type, backend,
+                      extra_args=None):
     """Write run.ps1 (Windows) and run.sh (Linux) so the server can be
     restarted later (with overridable -Port/-CtxSize/-KvType) without going
     through the installer/GUI again. Both are generated from the same
@@ -163,6 +238,9 @@ def write_run_scripts(root, bin_dir, model_path, model_id, arch, port, ctx, kv_t
     """
     n_gpu_layers = "0" if backend == "cpu" else "999"
     moe_flag = (backend != "cpu" and arch == "moe")
+    extra_args = list(extra_args or [])
+    extra_ps_entries = "".join(f",\n    {_ps1_single_quoted(arg)}" for arg in extra_args)
+    extra_sh_words = " ".join(_sh_quoted(arg) for arg in extra_args)
 
     # Forward slashes work in both PowerShell (Windows and pwsh-on-Linux) and
     # bash - avoids writing a run.sh full of backslashes when install.py runs
@@ -195,7 +273,7 @@ $serverArgs = @(
     "-ctv", $KvType,
     "--jinja",
     "--host", "127.0.0.1",
-    "--port", "$Port"
+    "--port", "$Port"{extra_ps_entries}
 )
 Write-Host "==> llama-server $($serverArgs -join ' ')"
 & $Server @serverArgs
@@ -227,6 +305,7 @@ fi
 PORT="${{PORT:-{port}}}"
 CTX_SIZE="${{CTX_SIZE:-{ctx}}}"
 KV_TYPE="${{KV_TYPE:-{kv_type}}}"
+EXTRA_ARGS=({extra_sh_words})
 
 [ -f "$MODEL_PATH" ] || {{ echo "Model not found: $MODEL_PATH" >&2; exit 1; }}
 SERVER="$BIN_DIR/llama-server"
@@ -242,7 +321,8 @@ exec "$SERVER" \\
     --flash-attn on \\
     -ctk "$KV_TYPE" -ctv "$KV_TYPE" \\
     --jinja \\
-    --host 127.0.0.1 --port "$PORT"
+    --host 127.0.0.1 --port "$PORT" \\
+    "${{EXTRA_ARGS[@]}}"
 """
     sh_path = os.path.join(root, "run.sh")
     with open(sh_path, "w", encoding="utf-8", newline="\n") as f:

@@ -49,7 +49,9 @@ def choose_model_quant(hw):
         if not choice:
             choice = "1"
         if choice.lower() == "t":
-            _print_experimental(hw)
+            picked = _choose_experimental()
+            if picked:
+                return picked
             continue
         if choice.isdigit() and 1 <= int(choice) <= len(options):
             picked = options[int(choice) - 1]
@@ -90,21 +92,29 @@ def choose_mlx_model_quant(hw):
         print("  invalid choice, try again")
 
 
-def _print_experimental(hw):
+def _choose_experimental():
     print("\n=== Experimental (TurboQuant) ===")
     print("  Requires a community llama.cpp fork with TQ kernel support - the")
     print("  official llama.cpp releases do NOT understand these quant types.")
-    print("  This installer will download the weights but will NOT auto-download")
-    print("  or execute a third-party prebuilt binary. See docs/TURBOQUANT.md.\n")
-    idx = []
+    print("  You must provide a reviewed build with --bin-dir; this installer")
+    print("  never downloads or executes a third-party runtime. See docs/TURBOQUANT.md.\n")
+    options = []
     for model in catalog.MODELS:
         for quant in model["quants"]:
             if quant.get("experimental"):
-                idx.append((model, quant))
-                print(f"  [{len(idx)}] {model['display_name']:26} {quant['label']}")
-    if not idx:
-        print("  (none in the catalog yet)")
-    print()
+                options.append((model, quant))
+                print(f"  [{len(options)}] {model['display_name']:26} {quant['label']}")
+    if not options:
+        print("  (none in the catalog yet)\n")
+        return None
+    while True:
+        choice = input(f"Pick a number [1-{len(options)}], or [b] back: ").strip().lower()
+        if choice == "b":
+            return None
+        if choice.isdigit() and 1 <= int(choice) <= len(options):
+            model, quant = options[int(choice) - 1]
+            return model, quant, "primary"
+        print("  invalid choice, try again")
 
 
 def confirm(prompt, default=True):
