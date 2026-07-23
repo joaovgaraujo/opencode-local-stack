@@ -24,15 +24,10 @@ VERDICT_COLOR = {"fits": "#1a7f37", "tight": "#9a6700", "no": "#8b8b8b"}
 VERDICT_LABEL = {"fits": "Fits", "tight": "Tight fit", "no": "Won't fit"}
 
 
-def _build_rows(hw, show_experimental):
+def _build_rows(hw):
     rows = []
     for model, quant, profile in catalog.all_variants():
-        experimental = quant.get("experimental")
-        if experimental and not show_experimental:
-            continue
-        if experimental and profile != "primary":
-            continue  # only show one row per experimental quant, not one per profile
-        if not experimental and not quant.get("default") and profile != "primary":
+        if not quant.get("default") and profile != "primary":
             continue  # keep the list short: conservative profile only alongside the default quant
         verdict = catalog.fit_verdict(model, quant, profile, hw.vram_free_gb or hw.vram_total_gb,
                                        hw.ram_free_gb, hw.disk_free_gb)
@@ -69,7 +64,6 @@ class InstallerWizard:
         self.root.geometry("880x560")
         self.log_queue = queue.Queue()
         self.selection = None
-        self.show_experimental = tk.BooleanVar(value=False)
         self.skip_tests = tk.BooleanVar(value=False)
         # OpenCode needs Node; opt in by default so the GUI needs no manual
         # prerequisites (Windows: winget, macOS: Homebrew - see opencode_setup).
@@ -115,11 +109,6 @@ class InstallerWizard:
 
         opts = ttk.Frame(self.picker)
         opts.pack(fill="x")
-        if self.engine != "rapidmlx":
-            ttk.Checkbutton(opts, text="Show experimental TurboQuant variants (needs a custom "
-                                        "llama.cpp fork - see docs/TURBOQUANT.md)",
-                            variable=self.show_experimental,
-                            command=self._populate_tree).pack(anchor="w")
         ttk.Checkbutton(opts, text="Install Node.js if missing (required for OpenCode)",
                         variable=self.install_node).pack(anchor="w")
         ttk.Checkbutton(opts, text="Skip validation tests after install",
@@ -140,7 +129,7 @@ class InstallerWizard:
                     VERDICT_LABEL[verdict],
                 ))
         else:
-            self._rows = _build_rows(self.hw, self.show_experimental.get())
+            self._rows = _build_rows(self.hw)
             for i, (model, quant, profile, verdict, need_vram, need_ram) in enumerate(self._rows):
                 label = quant["label"] + (f"  [{profile}]" if profile != "primary" else "")
                 if i == 0 and verdict == "fits":

@@ -45,7 +45,7 @@ RAM_RESERVE_GB = 2.0                 # avoid paging model data under ordinary de
 # and the server returns HTTP 503 "would exceed gpu_memory_utilization cap".
 #
 # The runtime memory a model needs is NOT flat across architectures, and the gap
-# is large. Two runs on the same 16 GB M4, both with TurboQuant K8V4 KV
+# is large. Two runs on the same 16 GB M4, both with the tested KV
 # compression and --pflash off:
 #   qwen3.5-9b-4bit: loads at ~5.2 GB, served its full 262,144-token context
 #                    window (memory was never the limit, only prefill speed).
@@ -53,7 +53,7 @@ RAM_RESERVE_GB = 2.0                 # avoid paging model data under ordinary de
 #                    tokens. Its KV plus prefill working set is far heavier, so
 #                    ~4.6 GB of headroom bought almost no usable context.
 # So the estimate is size + base overhead + a per-family KV term. Qwen (GQA,
-# TurboQuant-friendly) carries almost no KV overhead; Gemma dense carries a lot.
+# GQA) carries almost no KV overhead; Gemma dense carries a lot.
 # This puts gemma-4-12b at "no" on 16 GB (measured: unusable for agents there)
 # and "fits" from 24 GB up, while qwen3.5-9b "fits" from 16 GB and qwen3.5-4b is
 # the only model that fits 8 GB. The live preflight still gates actual startup.
@@ -86,10 +86,6 @@ MODELS = [
              "repo": "unsloth/Qwen3.6-35B-A3B-GGUF", "size_gb": 24.64},
             {"label": "Q8_0 (max quality)", "file": "Qwen3.6-35B-A3B-Q8_0.gguf",
              "repo": "unsloth/Qwen3.6-35B-A3B-GGUF", "size_gb": 34.37},
-            {"label": "TurboQuant TQ3_1S (experimental - needs a custom llama.cpp fork)",
-             "file": "qwen3.6-35b-a3b-instruct-TQ3_1S.gguf",
-             "repo": "mad-lab-ai/Qwen3.6-35B-A3B-tq-gguf", "size_gb": 16.37,
-             "experimental": True, "engine": "turboquant"},
         ],
         "mlx": [
             {"label": "4bit (recommended)", "repo": "mlx-community/Qwen3.6-35B-A3B-4bit",
@@ -333,7 +329,7 @@ def all_variants():
 
 def _mlx_kv_factor(model):
     """KV + prefill working-set weight, per GB of model weights, by family.
-    Gemma dense attention is heavy (measured); Qwen GQA with TurboQuant is not.
+    Gemma dense attention is heavy (measured); Qwen GQA is not.
     See the MLX_KV_FACTOR comment block for the two measured anchor runs."""
     mid = model["id"]
     for family, factor in MLX_KV_FACTOR.items():

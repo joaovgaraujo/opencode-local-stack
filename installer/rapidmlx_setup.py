@@ -9,8 +9,7 @@ Homepage/Repository/Documentation links all point at raullenchai/Rapid-MLX,
 so that's what this installer trusts and what gets installed (`pip install
 rapid-mlx`, the normal PyPI channel - not the project's own `curl | bash`
 one-liner, which this installer deliberately never runs automatically for
-the same reason TurboQuant's third-party binaries aren't auto-run; see
-docs/TURBOQUANT.md for that precedent).
+the same reason a project's own bootstrap script isn't auto-run).
 
 Unlike llama.cpp, rapid-mlx manages its own model download - `rapid-mlx
 serve <hf-repo-id>` fetches the MLX-format weights from Hugging Face itself
@@ -34,7 +33,6 @@ import time
 RAPIDMLX_VERSION = "0.10.15"
 VENV_DIR_NAME = ".rapidmlx-venv"
 PID_FILE_NAME = ".rapidmlx.pid"
-TURBOQUANT_MODES = {"k8v4", "v4", "none"}
 PFLASH_MODES = {"off", "auto", "always"}
 
 
@@ -65,11 +63,10 @@ def _version_tuple(v):
 
 def _is_compatible(exe):
     """A PATH rapid-mlx is only usable if it's new enough to understand the
-    serve flags this installer emits. The ``--kv-cache-turboquant <mode>``
-    value form and the ``--pflash`` flag both landed in the 0.10.x line;
-    older builds (e.g. Homebrew's 0.6.x) take ``--kv-cache-turboquant`` as a
-    bare boolean and choke on the ``k8v4`` argument. Rather than probe every
-    flag, gate on the pinned major.minor so behavior stays reproducible."""
+    serve flags this installer emits. The ``--pflash`` flag landed in the
+    0.10.x line; older builds (e.g. Homebrew's 0.6.x) don't understand it.
+    Rather than probe every flag, gate on the pinned major.minor so behavior
+    stays reproducible."""
     ver = rapidmlx_version(exe)
     if not ver:
         return False, None
@@ -106,7 +103,7 @@ def ensure_rapidmlx(root, log):
 
     # A PATH install that's too old to understand our serve flags is ignored
     # by find_rapidmlx; say so before falling back to the pinned venv, or the
-    # skip looks like a bug (issue #: Homebrew 0.6.x + --kv-cache-turboquant).
+    # skip looks like a bug (issue #: Homebrew 0.6.x + --pflash).
     path_exe = shutil.which("rapid-mlx")
     if path_exe:
         ok, ver = _is_compatible(path_exe)
@@ -139,11 +136,9 @@ def ensure_rapidmlx(root, log):
     return find_rapidmlx(root)
 
 
-def build_serve_args(repo_id, port, turboquant="k8v4", pflash="off"):
+def build_serve_args(repo_id, port, pflash="off"):
     # The catalog deliberately contains text models only. Rapid-MLX's
     # filename heuristic can mistake Qwen3.5 text checkpoints for MLLMs.
-    # K8V4 is Rapid-MLX's native TurboQuant cache (not the external mlx-lm
-    # monkey-patch); it passed this repository's 30k-context suite on Apple Silicon.
     #
     # --pflash off: Rapid-MLX auto-enables PFlash ("always") for verified
     # Qwen3.5/3.6 aliases, but its PFlash path refuses to run once the model is
@@ -152,12 +147,10 @@ def build_serve_args(repo_id, port, turboquant="k8v4", pflash="off"):
     # for multimodal models" before the server ever binds. Forcing it off keeps
     # startup reliable across the catalog; the models here are text-only, so the
     # long-prompt prefill compression PFlash would add is not worth a crash.
-    if turboquant not in TURBOQUANT_MODES:
-        raise ValueError(f"Unsupported Rapid-MLX TurboQuant mode: {turboquant}")
     if pflash not in PFLASH_MODES:
         raise ValueError(f"Unsupported Rapid-MLX PFlash mode: {pflash}")
     return ["--no-telemetry", "serve", repo_id, "--no-mllm",
-            "--kv-cache-turboquant", turboquant, "--pflash", pflash,
+            "--pflash", pflash,
             "--port", str(port), "--host", "127.0.0.1"]
 
 
@@ -214,12 +207,10 @@ def is_apple_silicon_macos():
     return platform.system() == "Darwin" and platform.machine() == "arm64"
 
 
-def write_run_script(root, repo_id, port, turboquant="k8v4", pflash="off"):
+def write_run_script(root, repo_id, port, pflash="off"):
     """Write a restart script that also works with the project-local venv."""
     import shlex
 
-    if turboquant not in TURBOQUANT_MODES:
-        raise ValueError(f"Unsupported Rapid-MLX TurboQuant mode: {turboquant}")
     if pflash not in PFLASH_MODES:
         raise ValueError(f"Unsupported Rapid-MLX PFlash mode: {pflash}")
 
@@ -241,8 +232,8 @@ else
     exit 1
 fi
 
-echo "==> $RAPID_MLX --no-telemetry serve $REPO --no-mllm --kv-cache-turboquant {turboquant} --pflash {pflash} --port $PORT --host 127.0.0.1"
-exec "$RAPID_MLX" --no-telemetry serve "$REPO" --no-mllm --kv-cache-turboquant {turboquant} --pflash {pflash} --port "$PORT" --host 127.0.0.1
+echo "==> $RAPID_MLX --no-telemetry serve $REPO --no-mllm --pflash {pflash} --port $PORT --host 127.0.0.1"
+exec "$RAPID_MLX" --no-telemetry serve "$REPO" --no-mllm --pflash {pflash} --port "$PORT" --host 127.0.0.1
 """
     sh_path = os.path.join(root, "run.sh")
     with open(sh_path, "w", encoding="utf-8", newline="\n") as f:

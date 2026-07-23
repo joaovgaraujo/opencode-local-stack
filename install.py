@@ -12,7 +12,7 @@ Two engines, picked automatically by hwdetect.pick_engine - see
 docs/MODELS.md and docs/MACOS.md:
   llamacpp - Windows/Linux: llama-server serving GGUF weights.
   rapidmlx - macOS/Apple Silicon: rapid-mlx serving MLX weights, validated
-             on Apple Silicon with native K8V4 TurboQuant KV cache.
+             on Apple Silicon.
 
 What it does (idempotent - safe to re-run):
   1. Detects OS, GPU/unified-memory, VRAM, RAM, free disk.
@@ -171,23 +171,6 @@ def run_pipeline_llamacpp(model, quant, profile, hw, skip_tests=False, port=8080
     counterpart."""
     report = {}
     extra_server_args = list(extra_server_args or [])
-    is_turboquant = quant.get("engine") == "turboquant"
-    if is_turboquant:
-        if backend is None:
-            die("TurboQuant uses a custom runtime whose backend cannot be inferred. "
-                "Pass its real backend explicitly, for example --backend cuda, together "
-                "with --bin-dir; see docs/TURBOQUANT.md.")
-        if not bin_dir:
-            die("TurboQuant weights require a reviewed TQ-enabled llama.cpp build. "
-                "Pass --bin-dir /path/to/that/build and the build's real backend with "
-                "--backend. Stock llama.cpp cannot load TQ3_1S; see docs/TURBOQUANT.md.")
-        if not os.path.isdir(bin_dir) or not server.find_server_binary(bin_dir):
-            die(f"TurboQuant requires --bin-dir to contain a llama-server binary; none "
-                f"was found under {bin_dir!r}. Build or install a reviewed TQ-enabled "
-                "fork there first. This installer never downloads a third-party runtime; "
-                "see docs/TURBOQUANT.md.")
-        log("TurboQuant weights selected. Using the explicitly supplied third-party "
-            "runtime; this installer never downloads one automatically.")
 
     backend = backend or hwdetect.pick_llamacpp_backend(hw)
     if platform.system() == "Linux" and backend == "cuda":
@@ -292,7 +275,7 @@ def _mlx_memory_preflight(model, quant, log):
 
 
 def run_pipeline_mlx(model, quant, hw, skip_tests=False, port=8000, install_node=False,
-                      stop_when_done=False, mlx_turboquant="k8v4", log=print,
+                      stop_when_done=False, log=print,
                       progress=lambda *a: None):
     """The rapid-mlx install pipeline (macOS/Apple Silicon only). Unlike
     llama.cpp, rapid-mlx manages its own weight download (see
@@ -309,7 +292,7 @@ def run_pipeline_mlx(model, quant, hw, skip_tests=False, port=8000, install_node
     log("=== 2/5 Starting rapid-mlx server ===")
     rapidmlx_setup.kill_existing(ROOT)
     _mlx_memory_preflight(model, quant, log)
-    args = rapidmlx_setup.build_serve_args(quant["repo"], port, mlx_turboquant)
+    args = rapidmlx_setup.build_serve_args(quant["repo"], port)
     log(f"  rapid-mlx {' '.join(args)}  (first run downloads the model from Hugging Face)")
     proc = rapidmlx_setup.start_rapidmlx(exe, args, os.path.join(ROOT, "server.log"),
                                           os.path.join(ROOT, "server.err"))
@@ -332,14 +315,13 @@ def run_pipeline_mlx(model, quant, hw, skip_tests=False, port=8000, install_node
     # if rapid-mlx's actual max context for this model differs.
     ctx = catalog.ctx_sizes(model)["primary"]
     report["Model"] = f"{model['display_name']} / {quant['label']} ({quant['repo']})"
-    report["Server"] = (f"port {port}, ctx {ctx} (assumed), "
-                        f"Rapid-MLX TurboQuant={mlx_turboquant}")
+    report["Server"] = f"port {port}, ctx {ctx} (assumed)"
 
     log("=== 3/5 Writing config + run script ===")
     opencode_json = os.path.join(ROOT, "opencode.json")
     server.write_opencode_json(opencode_json, model, port, ctx, provider_key="rapidmlx",
                                 provider_label="rapid-mlx (local)", served_model_id=alias)
-    rapidmlx_setup.write_run_script(ROOT, quant["repo"], port, mlx_turboquant)
+    rapidmlx_setup.write_run_script(ROOT, quant["repo"], port)
     log("  opencode.json, run.sh written")
 
     log("=== 4/5 Validation ===")
@@ -439,8 +421,6 @@ def parse_args():
                                     "(rapid-mlx/macOS) - see --list-models")
     p.add_argument("--profile", choices=["auto", "primary", "conservative"], default="auto",
                     help="llama.cpp context profile; auto keeps a 1 GB free-VRAM reserve")
-    p.add_argument("--mlx-turboquant", choices=["k8v4", "v4", "none"], default="k8v4",
-                    help="macOS only: Rapid-MLX KV cache mode (default: tested k8v4)")
     p.add_argument("--port", type=int, default=None,
                     help="default 8080 for llama.cpp, 8000 for rapid-mlx")
     p.add_argument("--bin-dir", default=None, help="llama.cpp only: reuse an existing llama.cpp folder")
@@ -468,7 +448,6 @@ def print_catalog():
         print("  llama.cpp (GGUF, Windows/Linux):")
         for q in model["quants"]:
             tag = " [default]" if q.get("default") else ""
-            tag += " [experimental]" if q.get("experimental") else ""
             print(f"    {q['file']:45} {q['size_gb']:6.1f} GB  {q['label']}{tag}")
         print("  rapid-mlx (MLX, macOS/Apple Silicon):")
         for q in model.get("mlx", []):
@@ -543,7 +522,7 @@ def _dispatch(model, quant, profile, hw, engine, port, args, skip_tests, log, pr
                 "not the macOS Rapid-MLX engine.")
         run_pipeline_mlx(model, quant, hw, skip_tests=skip_tests, port=port,
                           install_node=args.install_node, stop_when_done=args.stop_when_done,
-                          mlx_turboquant=args.mlx_turboquant, log=log, progress=progress)
+                          log=log, progress=progress)
     else:
         selected_backend = (None if args.backend == "auto" else args.backend)
         run_pipeline_llamacpp(model, quant, profile, hw, skip_tests=skip_tests, port=port,

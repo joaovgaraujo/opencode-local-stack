@@ -16,8 +16,6 @@ def print_hardware(hw):
 def _scored_options(hw):
     options = []
     for model, quant, profile in catalog.all_variants():
-        if quant.get("experimental"):
-            continue  # experimental (TurboQuant) entries are opt-in only, see docs/TURBOQUANT.md
         if not quant.get("default") and profile != "primary":
             continue  # keep the list short: only show conservative profile alongside the default quant
         verdict = catalog.fit_verdict(model, quant, profile, hw.vram_free_gb or hw.vram_total_gb,
@@ -49,16 +47,10 @@ def choose_model_quant(hw):
               f"~{o['need_vram']:.1f}GB VRAM / ~{o['need_ram']:.1f}GB RAM  "
               f"-> {VERDICT_LABEL[o['verdict']]}")
     print()
-    print("  [t]  show experimental TurboQuant variants (needs a custom llama.cpp fork)")
     while True:
         choice = input(f"Pick a number [1-{len(options)}] (default 1): ").strip()
         if not choice:
             choice = "1"
-        if choice.lower() == "t":
-            picked = _choose_experimental()
-            if picked:
-                return picked
-            continue
         if choice.isdigit() and 1 <= int(choice) <= len(options):
             picked = options[int(choice) - 1]
             return picked["model"], picked["quant"], picked["profile"]
@@ -96,31 +88,6 @@ def choose_mlx_model_quant(hw):
         if choice.isdigit() and 1 <= int(choice) <= len(options):
             picked = options[int(choice) - 1]
             return picked["model"], picked["quant"]
-        print("  invalid choice, try again")
-
-
-def _choose_experimental():
-    print("\n=== Experimental (TurboQuant) ===")
-    print("  Requires a community llama.cpp fork with TQ kernel support - the")
-    print("  official llama.cpp releases do NOT understand these quant types.")
-    print("  You must provide a reviewed build with --bin-dir; this installer")
-    print("  never downloads or executes a third-party runtime. See docs/TURBOQUANT.md.\n")
-    options = []
-    for model in catalog.MODELS:
-        for quant in model["quants"]:
-            if quant.get("experimental"):
-                options.append((model, quant))
-                print(f"  [{len(options)}] {model['display_name']:26} {quant['label']}")
-    if not options:
-        print("  (none in the catalog yet)\n")
-        return None
-    while True:
-        choice = input(f"Pick a number [1-{len(options)}], or [b] back: ").strip().lower()
-        if choice == "b":
-            return None
-        if choice.isdigit() and 1 <= int(choice) <= len(options):
-            model, quant = options[int(choice) - 1]
-            return model, quant, "primary"
         print("  invalid choice, try again")
 
 

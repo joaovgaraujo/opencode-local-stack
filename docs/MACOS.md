@@ -18,8 +18,7 @@ The rapid-mlx path is validated end-to-end on Apple Silicon with sufficient
 unified memory using Python 3.14, Rapid-MLX 0.10.15, and
 `mlx-community/Qwen3.5-4B-4bit`. The OpenAI-compatible endpoint passed short
 completion, Python code generation, tool calling, and the 30,509-token needle
-test; OpenCode also passed its write-and-run agent test. The same four endpoint
-tests pass with Rapid-MLX's native `--kv-cache-turboquant k8v4` mode enabled.
+test; OpenCode also passed its write-and-run agent test.
 Per-machine `RESULTS.md`, `server.log`, and `server.err` remain the source of
 truth for other chips and larger models.
 
@@ -46,9 +45,7 @@ Documentation) was checked directly: all three point at
 in a project-local `.rapidmlx-venv` (`rapid-mlx==0.10.15` from the normal
 PyPI channel). This works with Homebrew Python, which correctly rejects
 global `pip install` calls under PEP 668. It does **not** run the project's
-own `curl | bash` one-liner installer, for the same reason
-[`TURBOQUANT.md`](TURBOQUANT.md) gives for not auto-running third-party
-prebuilt binaries: piping a remote script into a shell, or trusting an
+own `curl | bash` one-liner installer: piping a remote script into a shell, or trusting an
 unreviewed second implementation of the same project, isn't something this
 installer will do silently on your behalf. If you install rapid-mlx some
 other way first, `install.py` just uses whatever's already on PATH.
@@ -61,8 +58,7 @@ other way first, `install.py` just uses whatever's already on PATH.
 | Who downloads weights | `install.py` (from the exact `unsloth/*` file) | rapid-mlx itself, on first `serve <repo-id>` |
 | Memory model | separate VRAM (GPU) + RAM (CPU/experts) | one unified pool - see below |
 | MoE handling | `--cpu-moe` (experts to system RAM) | rapid-mlx manages placement itself; not configured by this installer |
-| Context/profile | `--ctx-size`, primary/conservative/auto | no server context flag; OpenCode uses the catalog context and K8V4 reduces long-context KV pressure |
-| KV compression | q8_0 by default | native Rapid-MLX TurboQuant K8V4 by default; `--mlx-turboquant none` disables it |
+| Context/profile | `--ctx-size`, primary/conservative/auto | no server context flag; OpenCode uses the catalog context |
 | Text-only serving | n/a | The catalog models are launched with `--no-mllm`; this prevents Rapid-MLX from misclassifying a text checkpoint as vision-only and requiring `mlx-vlm`. |
 | Restart script | `run.ps1` / `run.sh` | `run.sh` only (no `run.ps1` - there's no Windows rapid-mlx target) |
 
@@ -87,7 +83,7 @@ The memory a model needs is not flat across architectures, and the gap is
 large. `estimate_mlx_requirements()` returns
 `size x 1.05 + 1.0 GB + size x kv_factor`, where `kv_factor` is 1.07 for Gemma
 and 0.0 for Qwen. Two runs on the same 16 GB M4 fixed those numbers, both with
-TurboQuant K8V4 and `--pflash off`:
+`--pflash off`:
 
 - `qwen3.5-9b-4bit` loads at 5.2 GB and served its full 262,144-token context
   window; memory was never the limit, only prefill speed.
@@ -121,7 +117,7 @@ guaranteeing a fit. Measure your own machine after install.
 
 ### Measured performance (16 GB Apple Silicon M4, rapid-mlx 0.10.15)
 
-Both models at 4bit MLX, TurboQuant K8V4, `--pflash off`. tok/s does not
+Both models at 4bit MLX, `--pflash off`. tok/s does not
 transfer between machines; re-measure your own.
 
 | Model | Footprint | Decode | Prefill | Max usable context |
@@ -136,12 +132,11 @@ it `no` at 16 GB and `fits` from 24 GB up. `qwen3.5-9b` holds real context on
 
 Two startup problems the installer now handles automatically:
 
-- **`rapid-mlx` version.** The `--kv-cache-turboquant <mode>` value form and
-  the `--pflash` flag are `0.10.x`-era; an older Homebrew/pipx `rapid-mlx`
-  (e.g. `0.6.x`, where `--kv-cache-turboquant` is a bare boolean) crashes with
-  `unrecognized arguments: k8v4`. The installer now version-checks any
-  `rapid-mlx` on `PATH` and falls back to the pinned `.rapidmlx-venv` when
-  it's too old, instead of trusting whatever `PATH` happens to resolve.
+- **`rapid-mlx` version.** The `--pflash` flag is `0.10.x`-era; an older
+  Homebrew/pipx `rapid-mlx` (e.g. `0.6.x`) does not recognize it. The installer
+  now version-checks any `rapid-mlx` on `PATH` and falls back to the pinned
+  `.rapidmlx-venv` when it's too old, instead of trusting whatever `PATH`
+  happens to resolve.
 - **PFlash + multimodal misclassification.** rapid-mlx auto-enables PFlash
   (`--pflash always`) for verified Qwen3.5/3.6 aliases, then refuses to run it
   once the model is (mis)classified as multimodal - and that check ignores

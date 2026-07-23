@@ -60,7 +60,7 @@ quants score a few points below these full-precision numbers.</sub>
 ## Local measurements on a 16 GB Apple M4
 
 Measured on one machine with rapid-mlx 0.10.15, 4bit MLX unless noted,
-TurboQuant K8V4, `--pflash off`. tok/s does not transfer between machines. The
+`--pflash off`. tok/s does not transfer between machines. The
 OpenCode column is a single smoke test (write `calc.py`, run it, report stdout),
 so a pass means the tool-calling loop works at all, not that the model handles
 real multi-step edits.

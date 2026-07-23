@@ -69,16 +69,6 @@ VRAM, ~22.7 GB RAM); expect similar ballpark numbers for the other MoE model,
 and re-measure with `tests/vram_logger.ps1` / a `nvidia-smi -l` loop on your
 own machine before trusting a number for capacity planning.
 
-## TurboQuant
-
-One experimental TurboQuant quant is listed for Qwen3.6-35B-A3B (weights
-verified at `mad-lab-ai/Qwen3.6-35B-A3B-tq-gguf`). It needs a community
-llama.cpp fork with TurboQuant kernel support; the official releases don't
-understand the format. See [`TURBOQUANT.md`](TURBOQUANT.md) before picking it.
-No verified TurboQuant GGUF weights were found for the other models at the
-time this catalog was written, so none are listed. Don't assume one exists
-just because the technique applies in principle.
-
 ## Sources checked while building this catalog (2026-07)
 
 GGUF (llama.cpp engine):
@@ -88,7 +78,6 @@ GGUF (llama.cpp engine):
 - [unsloth/gemma-4-E4B-it-GGUF](https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF)
 - [unsloth/Qwen3.5-4B-GGUF](https://huggingface.co/unsloth/Qwen3.5-4B-GGUF)
 - [unsloth/Qwen3.5-9B-GGUF](https://huggingface.co/unsloth/Qwen3.5-9B-GGUF)
-- [mad-lab-ai/Qwen3.6-35B-A3B-tq-gguf](https://huggingface.co/mad-lab-ai/Qwen3.6-35B-A3B-tq-gguf)
 - [ggml-org/llama.cpp releases](https://github.com/ggml-org/llama.cpp/releases/latest) (asset names for backend/OS selection)
 - [Can't disable thinking in gemma4 (26b-a4b) · llama.cpp Discussion #21338](https://github.com/ggml-org/llama.cpp/discussions/21338). Gemma 4's jinja template has known thinking/tool-call interplay quirks on some builds; if `reasoning_content`/tool calls look wrong, update llama.cpp first.
 

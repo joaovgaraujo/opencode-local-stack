@@ -43,8 +43,7 @@ Repeat `--extra-server-arg` to append one llama-server argument and persist it
 in `run.ps1`/`run.sh`. An argument beginning with `-` must use the equals form
 (`--extra-server-arg=--cont-batching`); provide its value separately
 (`--extra-server-arg=--threads --extra-server-arg 16`). These llama.cpp-only
-flags are rejected on the macOS Rapid-MLX path. On macOS, `--mlx-turboquant
-none` disables the native K8V4 cache for A/B tests.
+flags are rejected on the macOS Rapid-MLX path.
 
 Node.js (required for OpenCode) is never installed silently. If it's missing,
 `install.py` prints the right command for your OS and stops. Pass
@@ -65,7 +64,6 @@ tests/validate.py             # the 4 functional tests (env-driven: LLAMA_BASE_U
 tests/vram_logger.ps1         # Windows VRAM/RAM sampler
 docs/MODELS.md                # the model catalog, quant list, fit-estimate methodology
 docs/MACOS.md                 # macOS/Apple Silicon (rapid-mlx) - read this first if you're on a Mac
-docs/TURBOQUANT.md            # experimental TurboQuant quant + fork links
 docs/RESULTS.md               # historical validated results (Qwen3.6, primary profile)
 docs/DEPLOY.md                # this file
 ```

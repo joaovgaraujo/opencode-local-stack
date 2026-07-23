@@ -10,7 +10,7 @@ sampling overhead); the HellaSwag column is `llama-perplexity` on this machine.
 
 ## Environment
 - NVIDIA RTX 3500 Ada Laptop GPU (12 GB VRAM), 61 GB RAM, Linux.
-- **Runtimes, both at tag `b10088`, stock upstream llama.cpp (no TurboQuant):**
+- **Runtimes, both at tag `b10088`, stock upstream llama.cpp:**
   - CUDA: built locally from source, `sm_89`, CUDA 12.4.
   - Vulkan: the official prebuilt release the installer downloads.
 - All runs: Q4_K_M weights, `q8_0` K and V cache, flash attention on. MoE
@@ -45,8 +45,7 @@ is the d=16384 cell, which is representative. All other cells were stable.
   speed is limited by the GPU attention path, and CUDA's is far ahead of
   Vulkan: Qwen3.6-35B 36.8 vs 26.9 tok/s, Gemma 26B 27.5 vs 21.8 at d=0, with
   CUDA's prompt processing roughly 2x Vulkan's. If you run a `--cpu-moe` model
-  on NVIDIA, build CUDA (see [`DOCKER.md`](DOCKER.md) for a container that
-  already has it).
+  on NVIDIA, build CUDA (see the Linux + NVIDIA section in [`DEPLOY.md`](DEPLOY.md)).
 - **On dense models the two backends are close**, and Vulkan occasionally
   edges ahead at depth (Gemma E4B: 70.9 vs 58.2 tok/s at 32k). For a small
   dense model the official Vulkan prebuilt is a perfectly good default and
@@ -87,33 +86,6 @@ minus ~1 GiB OS/desktop headroom), q8_0 KV, weights placement as above.
 - Vulkan is consistently a few hundred MiB leaner than CUDA at the same
   context, and for Gemma 26B that let it reach 262k where CUDA topped out at
   131k under the same cap.
-
-## Experimental TurboQuant weight formats (Qwen3.6-35B, Gemma 26B)
-
-Measured on the TurboQuant fork's CUDA build (`GGML_TQ_NATIVE=1`), q8_0 KV, all
-experts on CPU (`-ncmoe 99`), compared against the same model's standard
-Q4_K_M on the same runtime.
-
-| Model / format | File size | pp512 | tg128 | Peak total GPU |
-|---|---:|---:|---:|---:|
-| Qwen3.6-35B Q4_K_M | 22.13 GB | 359 tok/s | **36.3 tok/s** | 2879 MiB |
-| Qwen3.6-35B TQ4_1S | 21.85 GB | 358 tok/s | **2.9 tok/s** | 2319 MiB |
-| Gemma 26B Q4_K_M | 15.78 GB | 451 tok/s | **27.6 tok/s** | 3447 MiB |
-| Gemma 26B TQ3_1S | 12.91 GB | 417 tok/s | **2.4 tok/s** | 2461 MiB |
-
-**Conclusion: the TurboQuant weight formats are not worth it for these MoE
-models.** TQ4_1S is only 1.3% smaller than Q4_K_M yet decodes ~12x slower
-(2.9 vs 36.3 tok/s), because the native TurboQuant CPU MoE dequant kernels are
-far slower than the mature Q4_K_M ones and these models run their experts on
-the CPU. Gemma's TQ3_1S is genuinely smaller (12.9 vs 15.8 GB, ~500 MiB less
-GPU) but pays the same ~11x decode penalty (2.4 vs 27.6 tok/s). Even offloading
-more experts to the GPU on the 12 GB card, TQ4_1S never exceeded ~4.2 tok/s.
-Stick with Q4_K_M; the TurboQuant *weight* formats only make sense if a model
-would otherwise not load at all, and even then decode is impractically slow.
-
-(This is separate from the TurboQuant *KV-cache* types, which are unusable on
-this fork for a different reason - a CUDA decode bug; see
-[`DOCKER.md`](DOCKER.md).)
 
 ## Reproducing
 
