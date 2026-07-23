@@ -52,23 +52,29 @@ docker build -f vendor/thetom-llama-cpp-turboquant/.devops/cuda.Dockerfile \
 `CUDA_DOCKER_ARCH=89` (Ada) keeps the local build fast; the published image
 covers `80;86;89;90;120`.
 
-## KV-cache type: use q8_0 for agentic work; TurboQuant V-cache is not safe there
+## KV-cache type: use q8_0; the fork's turbo4-V CUDA decode is broken
 
-Measured on this machine, 2026-07-23, CUDA fork build `c26cbdf`, Qwen3.6-35B
-Q4_K_M at 65,536 context:
+Measured + root-caused on this machine, 2026-07-23, CUDA fork build
+`c26cbdf`, Qwen3.6-35B Q4_K_M at 65,536 context:
 
-- `q8_0`/`turbo3`: full llama-bench speed, but **failed the code-gen
-  validation twice in a row** (parseable output, 0 functions, no docstring).
-- `q8_0`/`turbo4`: passed all four one-shot validations (33-39 tok/s, slightly
-  faster than the q8_0 baseline's 30-34), but **the OpenCode agentic smoke
-  test spiraled past its 360 s timeout 4 out of 4 attempts** — the reasoning
-  model decoded 6,000+ thinking tokens per request without converging.
-- `q8_0`/`q8_0`: agentic smoke test **passed in 48 s**.
+- `q8_0`/`turbo4` passed one-shot validations and even the 30k needle, but
+  failed the OpenCode agentic smoke test **7 out of 7 attempts** (reasoning
+  spirals, hallucinated paths, truncated commands). `q8_0`/`q8_0` passed the
+  same test repeatedly in under a minute.
+- Root cause is **not quantization quality**: fork commit `77ab7e988` routes
+  turbo4-V through a miscomputing "wide-V" flash-attention decode path
+  (`ggml/src/ggml-cuda/fattn-vec.cuh`), corrupting attention output on every
+  decode — greedy logit probes diverge from the q8_0 reference at the second
+  token, at every context length, and 3-bit turbo3 (which kept the old code
+  path) tracks q8_0 far more closely than 4-bit turbo4 does. This matches the
+  fork's open issue #207; a one-line fix (restoring `TURBO4_0` to the
+  4-rows-per-thread branch) took the agentic test from 0/7 to 3/3.
+- One-shot corruption symptoms differ by type: `turbo3`'s code-gen failures
+  (0 functions, 2/2) are consistent with genuine 3-bit quality loss.
+- Even with the fix, turbo4-V saves only ~175 MiB at 64k context on this
+  model (hybrid attention: 10 of 50 layers carry KV) with no speed gain.
 
-Earlier results had only ever throughput-benchmarked the turbo V-cache types
-and functionally validated turbo4 with one-shot tests; none of that catches
-the agentic/reasoning degradation. The VRAM saving from turbo V was modest
-here anyway (~150-200 MiB at 60k context, K dominates). Keep `q8_0`/`q8_0`
-for OpenCode; consider `turbo4` only for non-agentic long-context serving.
+Keep `q8_0`/`q8_0`. Do not enable `turbo4` on stock fork builds in any
+configuration (single-slot included — the kernel bug fires on every decode).
 
 [NVIDIA container toolkit]: https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html
