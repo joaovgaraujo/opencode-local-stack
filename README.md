@@ -12,8 +12,9 @@ combinations that fit your GPU or unified memory.
 Qwen3.6-35B-A3B is a mixture-of-experts model: 35B total parameters, 3B active.
 Its expert weights sit in system RAM (`--cpu-moe`) while attention and the KV
 cache stay on the GPU, so it runs in a few GB of VRAM. Measured 2.7 to 6.0 GB
-across 8k to 256k context on a 12 GB card (see [`RESULTS.md`](RESULTS.md)). The
-smaller dense models run entirely on the GPU.
+across 8k to 256k context on a 12 GB card (see
+[`docs/RESULTS.md`](docs/RESULTS.md)). The smaller dense models run entirely on
+the GPU.
 
 On Windows and Linux the engine is llama.cpp serving GGUF weights. On Apple
 Silicon it's rapid-mlx serving MLX weights. The macOS path is validated
@@ -63,14 +64,16 @@ the right command and stops.
 
 The RAM and VRAM columns below are conservative estimates from the fit
 heuristic in `installer/catalog.py`, not measurements. The exception is
-Qwen3.6-35B-A3B, which was benchmarked on a 12 GB-class GPU (12 GB). See
-[`RESULTS.md`](RESULTS.md) for those numbers and
-[`docs/MODELS.md`](docs/MODELS.md) for how the estimate is computed. Re-measure
-on your own machine with `tests/benchmark.py` before capacity planning.
+Qwen3.6-35B-A3B, which was measured on real hardware. See
+[`docs/RESULTS.md`](docs/RESULTS.md) for the llama.cpp `--cpu-moe` run and
+[`docs/TURBOQUANT.md`](docs/TURBOQUANT.md) for the 12 GB-class GPU (12 GB) CUDA
+run, plus [`docs/MODELS.md`](docs/MODELS.md) for how the estimate is computed.
+Re-measure on your own machine with `tests/benchmark.py` before capacity
+planning.
 
 | Model | Arch | Default quant | Est. VRAM | Est. RAM | Notes |
 |---|---|---:|---:|---:|---|
-| **Qwen3.6-35B-A3B** | MoE 35B/3B active | 20.6 GB | 2.7–6.0 GB (measured, `--cpu-moe`, 8k–256k ctx) | 21–22 GB (measured RSS) | See [`RESULTS.md`](RESULTS.md) for measured tok/s and TurboQuant results |
+| **Qwen3.6-35B-A3B** | MoE 35B/3B active | 20.6 GB | 2.7–6.0 GB (measured, `--cpu-moe`, 8k–256k ctx) | 21–22 GB (measured RSS) | See [`docs/RESULTS.md`](docs/RESULTS.md) for measured tok/s and [`docs/TURBOQUANT.md`](docs/TURBOQUANT.md) for TurboQuant results |
 | **Gemma 4 26B-A4B** | MoE 26B/4B active | 15.8 GB | 3.8–4.5 GB (est.) | 19.8 GB (est.) | Same `--cpu-moe` trick, lighter RAM footprint |
 | **Gemma 4 12B (Unified)** | Dense | 6.6 GB | 8.1–9.1 GB (est.) | ~3 GB (est.) | Fits fully on an 8 GB-class GPU |
 | **Qwen3.5-9B** | Dense | 5.3 GB | 6.8–7.8 GB (est.) | ~3 GB (est.) | Largest dense model in the catalog |
@@ -85,7 +88,7 @@ VRAM/RAM split (see [`docs/MACOS.md`](docs/MACOS.md)).
 Full quant list and exact file sizes: [`docs/MODELS.md`](docs/MODELS.md).
 TurboQuant KV-cache compression and the experimental TQ3_1S weight format both
 need a community llama.cpp fork, so read [`docs/TURBOQUANT.md`](docs/TURBOQUANT.md)
-and [`RESULTS.md`](RESULTS.md) first.
+and [`docs/RESULTS.md`](docs/RESULTS.md) first.
 
 ## Good to know
 
