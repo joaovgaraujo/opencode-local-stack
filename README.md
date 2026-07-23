@@ -76,7 +76,7 @@ planning.
 |---|---|---:|---:|---:|---|
 | **Qwen3.6-35B-A3B** | MoE 35B/3B active | 20.6 GB | 2.7–6.0 GB (measured, `--cpu-moe`, 8k–256k ctx) | 21–22 GB (measured RSS) | See [`docs/RESULTS.md`](docs/RESULTS.md) for measured tok/s and [`docs/TURBOQUANT.md`](docs/TURBOQUANT.md) for TurboQuant results |
 | **Gemma 4 26B-A4B** | MoE 26B/4B active | 15.8 GB | 3.8–4.5 GB (est.) | 19.8 GB (est.) | Same `--cpu-moe` trick, lighter RAM footprint |
-| **Gemma 4 12B (Unified)** | Dense | 6.6 GB | 8.1–9.1 GB (est.) | ~3 GB (est.) | Fits fully on an 8 GB-class GPU |
+| **Gemma 4 12B (Unified)** | Dense | 6.6 GB | 8.1–9.1 GB (est.) | ~3 GB (est.) | Needs a 12 GB-class GPU; measured not to fit 8 GB even at 8k ctx (see [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md)) |
 | **Qwen3.5-9B** | Dense | 5.3 GB | 6.8–7.8 GB (est.) | ~3 GB (est.) | Largest dense model in the catalog |
 | **Gemma 4 E4B** | Dense | 4.6 GB | 6.1–7.1 GB (est.) | ~3 GB (est.) | Smallest Gemma 4 text model |
 | **Qwen3.5-4B** | Dense | 2.6 GB | 4.1–5.1 GB (est.) | ~3 GB (est.) | Runs on almost anything, including CPU-only |
