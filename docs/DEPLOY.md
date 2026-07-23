@@ -1,8 +1,8 @@
-# DEPLOY — standing this up on Windows, Linux, or macOS
+# DEPLOY: standing this up on Windows, Linux, or macOS
 
 `install.py` is cross-platform (Windows, Linux, macOS/Apple Silicon), detects
 your hardware, and picks a matching engine + release automatically. This doc
-covers the Windows/Linux llama.cpp path in detail — for macOS/Apple Silicon
+covers the Windows/Linux llama.cpp path in detail. For macOS/Apple Silicon
 (rapid-mlx), see [`MACOS.md`](MACOS.md) instead, it's a different enough
 engine (MLX weights, unified memory, no llama.cpp binary) to warrant its own
 doc. For the common case, just run the installer.
@@ -47,7 +47,7 @@ flags are rejected on the macOS Rapid-MLX path. On macOS, `--mlx-turboquant
 none` disables the native K8V4 cache for A/B tests.
 
 Node.js (required for OpenCode) is never installed silently. If it's missing,
-`install.py` prints the right command for your OS and stops — pass
+`install.py` prints the right command for your OS and stops. Pass
 `--install-node` to let it run `winget install OpenJS.NodeJS.LTS` for you on
 Windows. On Linux there's no single package manager to assume, so it always
 just prints the command (`apt`/`dnf`/`pacman`/nvm) rather than guessing which
@@ -114,7 +114,7 @@ guessing.
 | Windows | AMD | `rocm` (HIP) | prebuilt `win-hip-radeon-x64` release |
 | Windows | other/unknown | `vulkan` | prebuilt `win-vulkan-x64` release |
 | Windows | none detected | `cpu` | prebuilt `win-cpu-x64` release |
-| Linux | NVIDIA | `vulkan` | **llama.cpp does not publish a prebuilt Linux CUDA binary** — see below |
+| Linux | NVIDIA | `vulkan` | **llama.cpp does not publish a prebuilt Linux CUDA binary**; see below |
 | Linux | AMD | `rocm` | prebuilt `ubuntu-rocm-7.2-x64` release |
 | Linux | other/unknown | `vulkan` | prebuilt `ubuntu-vulkan-x64` release |
 | Linux | none detected | `cpu` | prebuilt `ubuntu-x64` release |
@@ -123,9 +123,9 @@ guessing.
 
 llama.cpp's GitHub releases only ship a CUDA binary for Windows; Linux gets
 Vulkan, ROCm, or CPU prebuilts. Vulkan runs fine on NVIDIA cards and is what
-`install.py` uses by default — no build toolchain required. If you want CUDA
+`install.py` uses by default: no build toolchain required. If you want CUDA
 performance on Linux, build it yourself (this installer intentionally does
-not automate this — it needs a matching CUDA Toolkit/driver/gcc combination
+not automate this: it needs a matching CUDA Toolkit/driver/gcc combination
 that's too easy to get subtly wrong to script blindly):
 ```bash
 git clone https://github.com/ggml-org/llama.cpp
@@ -176,6 +176,6 @@ VRAM + faster):
   left alone.
 - Frontend is **OpenCode only**. Open WebUI was intentionally not set up.
 - Gemma 4's jinja chat template has known thinking/tool-call interplay quirks
-  on some llama.cpp builds — if you see garbled tool calls or `reasoning_content`
+  on some llama.cpp builds. If you see garbled tool calls or `reasoning_content`
   leaking into `content`, update llama.cpp first (see the link in
   [`MODELS.md`](MODELS.md)).

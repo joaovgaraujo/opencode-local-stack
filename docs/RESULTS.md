@@ -1,14 +1,14 @@
 > **Historical reference.** This run predates the multi-model catalog and
-> cross-platform `install.py` — it's kept as the one real, measured data point
+> cross-platform `install.py`; it's kept as the one real, measured data point
 > behind the VRAM/RAM fit estimates in [`MODELS.md`](MODELS.md) for the
 > Qwen3.6-35B-A3B / Q4_K_M / primary-profile case specifically. `install.py`
 > now writes a fresh `RESULTS.md` at the repo root for whatever
-> model/quant/profile you actually installed — that one reflects your machine.
+> model/quant/profile you actually installed; that one reflects your machine.
 
-# RESULTS — Qwen3.6-35B-A3B llama.cpp stack (8 GB profile)
+# RESULTS: Qwen3.6-35B-A3B llama.cpp stack (8 GB profile)
 
 Measured on a 24 GB desktop GPU as a stand-in for an 8 GB-class laptop target.
-The config was **deliberately constrained to an 8 GB budget** — the spare VRAM
+The config was **deliberately constrained to an 8 GB budget**. The spare VRAM
 was left unused on purpose. See "What transfers" in `DEPLOY.md`.
 
 ## Test setup (constrained to the 8 GB target)
@@ -28,7 +28,7 @@ was left unused on purpose. See "What transfers" in `DEPLOY.md`.
 | Model size | 22,134,528,992 bytes (~20.6 GiB), verified against HF; single file (not sharded) |
 | Model meta | 34.66B params (A3B MoE), vocab 248320, n_ctx_train 262144, ftype Q4_K_M |
 
-## Final flags (primary profile — the target 8 GB config)
+## Final flags (primary profile, the target 8 GB config)
 
 ```
 llama-server
@@ -43,7 +43,7 @@ llama-server
   --host 127.0.0.1 --port 8080
 ```
 
-## Performance (RE-MEASURE ON YOUR OWN GPU — tok/s does NOT transfer)
+## Performance (RE-MEASURE ON YOUR OWN GPU: tok/s does NOT transfer)
 
 | Metric | Value (on the test GPU) |
 |---|---|
@@ -52,10 +52,10 @@ llama-server
 | Prompt eval (30k prompt) | ~586 tok/s (~74s to ingest 30.5k tokens) |
 
 MoE experts run on CPU, so prompt ingestion is CPU-bound; a different machine
-(CPU, RAM bandwidth, GPU clocks, thermals) will differ — treat these as
+(CPU, RAM bandwidth, GPU clocks, thermals) will differ; treat these as
 baselines only.
 
-## VRAM / RAM fit (this DOES transfer — same 8 GB-class footprint)
+## VRAM / RAM fit (this DOES transfer: same 8 GB-class footprint)
 
 Windows/WDDM does not expose per-process VRAM (`nvidia-smi` shows `[N/A]`), so the
 llama-server footprint below = (whole-card VRAM with server) − (whole-card baseline
@@ -63,15 +63,15 @@ with server stopped), sampled once per second through the 30k needle test.
 
 | Profile | Peak VRAM (llama-server) | Peak RAM (working set) | Verdict vs 6.5 GB |
 |---|---|---|---|
-| **Primary — 65536 ctx, q8_0 KV** | **~4.0 GB** | ~22.7 GB | ✅ PASS (~2.5 GB headroom) |
-| Conservative — 32768 ctx, q8_0 KV | ~3.3 GB | ~22 GB | ✅ PASS (~3.2 GB headroom) |
+| **Primary, 65536 ctx, q8_0 KV** | **~4.0 GB** | ~22.7 GB | ✅ PASS (~2.5 GB headroom) |
+| Conservative, 32768 ctx, q8_0 KV | ~3.3 GB | ~22 GB | ✅ PASS (~3.2 GB headroom) |
 
 - KV cache (65536 @ q8_0) accounts for ~1.4 GB of the primary footprint; the rest is
   dense/attention weights + output head + compute buffer (constant, ctx-independent).
-- Halving ctx to 32768 saves ~0.7 GB VRAM. It does **not** meaningfully reduce RAM —
+- Halving ctx to 32768 saves ~0.7 GB VRAM. It does **not** meaningfully reduce RAM:
   the ~20 GB of experts dominate RAM regardless of ctx.
 - On a real 8 GB laptop, the desktop compositor eats ~1–1.5 GB, so expect ~5.5 GB total
-  card usage at the primary profile — still comfortably inside 8 GB.
+  card usage at the primary profile, still comfortably inside 8 GB.
 
 ## Pass / fail table
 
@@ -80,7 +80,7 @@ with server stopped), sampled once per second through the 30k needle test.
 | Short completion | ✅ PASS | Coherent one-sentence Rayleigh-scattering answer |
 | Code gen + `ast.parse` | ✅ PASS | Valid `fib(n)`, parsed, 1 func, docstring present |
 | Tool calling (`--jinja`) | ✅ PASS | Well-formed `get_weather(location="Paris")` tool call |
-| Long context — 30k needle @ 60% | ✅ PASS | Retrieved `PURPLE-WOMBAT-4291` exactly (prompt 30,507 tok) |
+| Long context: 30k needle @ 60% | ✅ PASS | Retrieved `PURPLE-WOMBAT-4291` exactly (prompt 30,507 tok) |
 | VRAM fit ≤ 6.5 GB | ✅ PASS | Peak ~4.0 GB (primary), ~3.3 GB (conservative) |
 | OpenCode agentic (write+run+read) | ✅ PASS | Wrote `calc.py` = `print(2+3)`, ran it, read back `5` |
 
@@ -91,6 +91,6 @@ with server stopped), sampled once per second through the 30k needle test.
 **Qwen3.6 is a reasoning model.** It emits `<think>` tokens (returned in a separate
 `reasoning_content` field) *before* the final `content`. With small `max_tokens`, the
 whole budget is consumed by reasoning and `content` comes back **empty** (finish_reason
-`length`). This is NOT a config or KV failure — it bit the first test run. Give generous
+`length`). This is NOT a config or KV failure; it bit the first test run. Give generous
 `max_tokens` (≥1024, ideally 2048+) so reasoning + answer both fit. OpenCode handles this
 natively (it has 32768 output budget configured).

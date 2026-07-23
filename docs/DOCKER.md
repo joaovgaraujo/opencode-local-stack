@@ -8,12 +8,12 @@ account.
 ## Where things live
 
 - **Source repo (fork):** <https://github.com/joaovgaraujo/llama-cpp-turboquant>,
-  branch `feature/turboquant-kv-cache` — a GitHub fork of the reviewed
+  branch `feature/turboquant-kv-cache`, a GitHub fork of the reviewed
   `TheTom/llama-cpp-turboquant` at revision `c26cbdf`, plus:
-  - `.github/workflows/docker-ghcr.yml` — builds the `server` target of
+  - `.github/workflows/docker-ghcr.yml`: builds the `server` target of
     `.devops/cuda.Dockerfile` and pushes to GHCR
     (CUDA archs `80;86;89;90;120`, `linux/amd64`).
-  - `.devops/cuda.Dockerfile` — gained an `EXTRA_CMAKE_ARGS` build-arg; the
+  - `.devops/cuda.Dockerfile`: gained an `EXTRA_CMAKE_ARGS` build-arg; the
     workflow passes `-DLLAMA_BUILD_UI=OFF`, matching the reviewed bare-metal
     build and avoiding the fork's fragile web-UI asset download/embed step
     (this stack uses OpenCode against the API, not the web UI).
@@ -35,7 +35,7 @@ The compose file mirrors the validated bare-metal configuration: Qwen3.6-35B
 Q4_K_M, 65,536 context, flash attention, all MoE experts on CPU
 (`--cpu-moe`), KV cache `q8_0`/`q8_0`.
 
-Point OpenCode at it exactly as with the bare-metal server — `opencode.json`
+Point OpenCode at it exactly as with the bare-metal server. `opencode.json`
 does not care whether the endpoint is a container.
 
 ## Building locally instead
@@ -64,7 +64,7 @@ Measured + root-caused on this machine, 2026-07-23, CUDA fork build
 - Root cause is **not quantization quality**: fork commit `77ab7e988` routes
   turbo4-V through a miscomputing "wide-V" flash-attention decode path
   (`ggml/src/ggml-cuda/fattn-vec.cuh`), corrupting attention output on every
-  decode — greedy logit probes diverge from the q8_0 reference at the second
+  decode. Greedy logit probes diverge from the q8_0 reference at the second
   token, at every context length, and 3-bit turbo3 (which kept the old code
   path) tracks q8_0 far more closely than 4-bit turbo4 does. This matches the
   fork's open issue #207; a one-line fix (restoring `TURBO4_0` to the
@@ -75,6 +75,6 @@ Measured + root-caused on this machine, 2026-07-23, CUDA fork build
   model (hybrid attention: 10 of 50 layers carry KV) with no speed gain.
 
 Keep `q8_0`/`q8_0`. Do not enable `turbo4` on stock fork builds in any
-configuration (single-slot included — the kernel bug fires on every decode).
+configuration (single-slot included, the kernel bug fires on every decode).
 
 [NVIDIA container toolkit]: https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html

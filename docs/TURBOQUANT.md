@@ -24,18 +24,18 @@ This summary is rephrased from the linked project's documentation.
 
 For this backend, TurboQuant applies a random rotation before scalar
 quantization, giving noticeably better quality-per-bit than standard GGUF
-quants at very low bit widths — appealing for a 35B MoE model you're trying
+quants at very low bit widths, appealing for a 35B MoE model you're trying
 to squeeze onto an 8 GB card.
 
 **It is not part of official llama.cpp.** Support exists only as independent
 community forks, none merged upstream as of when this doc was written. That
 matters for two reasons:
 
-1. **Format**: standard llama.cpp builds cannot load a TurboQuant GGUF at all —
+1. **Format**: standard llama.cpp builds cannot load a TurboQuant GGUF at all;
    they don't recognize the quant type.
 2. **Binaries**: a few forks publish prebuilt CUDA binaries, but they're
    compiled by individual community members, not the ggml-org project.
-   `install.py` deliberately **does not download or execute** any of them —
+   `install.py` deliberately **does not download or execute** any of them:
    downloading and silently running a third-party compiled binary with GPU
    driver access is a real supply-chain risk, and picking one fork over
    another isn't a call this installer should make for you.
@@ -67,7 +67,7 @@ Their formats, accelerated targets, and release policies differ; a binary
 that merely says “TurboQuant” is not proof that it supports this GGUF's exact
 weight type.
 
-## To actually test it
+## How to test it
 
 1. Review and build a TQ3_1S-capable fork. For the selected fork on Linux with
    NVIDIA CUDA, its normal llama.cpp build flags apply:
@@ -123,6 +123,6 @@ one machine, not portable estimates; see the local `RESULTS.md` for the full
 comparison and timeout details.
 
 If you find a verified TurboQuant GGUF repo for one of the other five models
-in the catalog, adding it is a one-entry change in `installer/catalog.py` —
+in the catalog, adding it is a one-entry change in `installer/catalog.py`,
 just verify the exact filename/size against the HF API first (see
 [`MODELS.md`](MODELS.md)).
