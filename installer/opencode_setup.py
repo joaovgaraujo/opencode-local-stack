@@ -164,6 +164,7 @@ def warm_up(scratch_dir, model_alias, timeout_s=180):
 
 def agentic_smoke_test(scratch_dir, model_alias, timeout_s=360):
     """Ask OpenCode to write + run calc.py, then verify it actually printed 5."""
+    os.makedirs(scratch_dir, exist_ok=True)
     for f in ("calc.py",):
         p = os.path.join(scratch_dir, f)
         if os.path.exists(p):
