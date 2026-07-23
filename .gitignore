@@ -41,3 +41,6 @@ Thumbs.db
 .env
 vendor/
 .claude/
+
+# Project-local Node.js (installed by install.py --install-node on Linux)
+node/

@@ -28,8 +28,9 @@ What it does (idempotent - safe to re-run):
   7. Writes RESULTS.md.
 
 Node (required for OpenCode) is never installed silently. Pass --install-node
-(the GUI checks this by default) to opt into a first-party installer where one
-exists: winget on Windows, Homebrew on macOS - see installer/opencode_setup.py.
+(the GUI checks this by default) to opt into a first-party installer: winget on
+Windows, Homebrew on macOS, the official nodejs.org tarball into a project-local
+./node on Linux (no sudo) - see installer/opencode_setup.py.
 """
 import argparse
 import json
@@ -415,7 +416,9 @@ def parse_args():
                     help="llama.cpp only: reuse an existing GGUF instead of downloading")
     p.add_argument("--skip-tests", action="store_true")
     p.add_argument("--stop-when-done", action="store_true")
-    p.add_argument("--install-node", action="store_true", help="Windows only: winget install Node LTS")
+    p.add_argument("--install-node", action="store_true",
+                   help="auto-install Node if missing: winget (Windows), Homebrew (macOS), "
+                        "official nodejs.org tarball into ./node (Linux, no sudo)")
     p.add_argument("--non-interactive", action="store_true",
                     help="require --model/--quant, never prompt")
     return p.parse_args()

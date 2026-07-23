@@ -1,14 +1,17 @@
 """OpenCode install + config + smoke test, cross-platform.
 
-Node/npm are never installed silently on Linux (too many package managers,
-usually needs sudo) - we print the right command and stop. When the caller
-opts in via install_node=True we use a first-party, no-sudo installer where
-one exists: winget on Windows, Homebrew on macOS (see try_install_node).
+Node/npm are never installed silently - we print the right command and stop.
+When the caller opts in via install_node=True we use a first-party, no-sudo
+installer on every platform (see try_install_node): winget on Windows,
+Homebrew on macOS, and on Linux the official nodejs.org tarball extracted
+into a project-local ./node directory (same pattern as the llama.cpp
+prebuilt download - nothing touches the system).
 """
 import os
 import platform
 import shutil
 import subprocess
+import tarfile
 
 
 def find_node():
@@ -28,6 +31,7 @@ def node_install_hint():
                 "    brew install node                  # Homebrew\n"
                 "    (or install via nvm: https://github.com/nvm-sh/nvm)")
     return ("one of:\n"
+            "    python install.py --install-node   # official tarball into ./node, no sudo\n"
             "    sudo apt install nodejs npm        # Debian/Ubuntu\n"
             "    sudo dnf install nodejs npm        # Fedora\n"
             "    sudo pacman -S nodejs npm          # Arch\n"
@@ -48,12 +52,52 @@ def install_node_macos():
     return find_node()
 
 
+NODE_VERSION = "22.22.1"  # LTS; matches the version this stack was validated with
+
+_LINUX_NODE_ARCHES = {"x86_64": "x64", "amd64": "x64", "aarch64": "arm64", "arm64": "arm64"}
+
+
+def install_node_linux(log):
+    """Download the official nodejs.org Linux tarball into <repo>/node and put
+    its bin/ on this process's PATH. Project-local and sudo-free, like the
+    llama.cpp prebuilt download; the system is never modified."""
+    from . import download
+
+    arch = _LINUX_NODE_ARCHES.get(platform.machine().lower())
+    if not arch:
+        log(f"No official Node build for architecture {platform.machine()!r}.")
+        return None
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    node_dir = os.path.join(root, "node")
+    dist = f"node-v{NODE_VERSION}-linux-{arch}"
+    bin_dir = os.path.join(node_dir, dist, "bin")
+    if not os.path.exists(os.path.join(bin_dir, "node")):
+        url = f"https://nodejs.org/dist/v{NODE_VERSION}/{dist}.tar.gz"
+        archive = os.path.join(node_dir, f"{dist}.tar.gz")
+        os.makedirs(node_dir, exist_ok=True)
+        log(f"Downloading Node v{NODE_VERSION} ({arch}) from nodejs.org ...")
+        download.download_with_retries(url, archive)
+        with tarfile.open(archive) as tf:
+            try:
+                # the tarball ships bin -> ../lib symlinks, which
+                # download.extract_archive's stricter policy rejects
+                tf.extractall(node_dir, filter="data")
+            except TypeError:  # Python < 3.12: no extraction filters
+                tf.extractall(node_dir)
+        os.remove(archive)
+    os.environ["PATH"] = bin_dir + os.pathsep + os.environ.get("PATH", "")
+    node = find_node()
+    if node:
+        log(f"Node v{NODE_VERSION} ready in {bin_dir}")
+        log(f"  (for your shell: export PATH=\"{bin_dir}:$PATH\")")
+    return node
+
+
 def try_install_node(log):
-    """Install Node when the caller opts in and the platform has a first-party,
-    no-sudo installer. Windows: winget. macOS: Homebrew (if present). Linux is
-    not automated - too many package managers, usually needs sudo - so the
-    caller falls back to the printed node_install_hint(). Returns the node path
-    on success, else None."""
+    """Install Node when the caller opts in, using a first-party, no-sudo
+    installer per platform: winget on Windows, Homebrew on macOS (if present),
+    the official nodejs.org tarball into ./node on Linux. Returns the node
+    path on success, else None (caller falls back to node_install_hint())."""
     system = platform.system()
     if system == "Windows":
         log("Installing Node LTS via winget ...")
@@ -65,6 +109,8 @@ def try_install_node(log):
         log("Homebrew not found - cannot auto-install Node. "
             "Install Homebrew (https://brew.sh) or Node directly.")
         return None
+    if system == "Linux":
+        return install_node_linux(log)
     return None
 
 

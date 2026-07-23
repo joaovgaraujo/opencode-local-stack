@@ -55,8 +55,9 @@ python install.py --skip-tests               # just start the server
 
 Node.js is required for OpenCode and is never installed without your say-so.
 The GUI checkbox and the `--install-node` flag opt into a first-party
-installer: winget on Windows, Homebrew on macOS. On Linux the installer prints
-the right command and stops.
+installer: winget on Windows, Homebrew on macOS, and on Linux the official
+nodejs.org tarball extracted into a project-local `./node` directory (no sudo,
+nothing touches the system - delete the directory to undo).
 
 `install.py` is idempotent, so re-running it is safe.
 
