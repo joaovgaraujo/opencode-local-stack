@@ -68,7 +68,7 @@ def verify_download_size(quant, path, log, fatal=True):
     GGUFs remain usable offline, while known partial files can be resumed.
     """
     try:
-        url = f"https://huggingface.co/api/models/{quant['repo']}/tree/main"
+        url = f"https://huggingface.co/api/models/{quant['repo']}/tree/main?recursive=true"
         req = urllib.request.Request(url, headers={"User-Agent": "opencode-local-installer"})
         with urllib.request.urlopen(req, timeout=15) as r:
             entries = json.load(r)
@@ -134,7 +134,8 @@ def ensure_model(model, quant, model_path, log, progress):
     if not model_path:
         model_dir = os.path.join(ROOT, "models")
         os.makedirs(model_dir, exist_ok=True)
-        model_path = os.path.join(model_dir, quant["file"])
+        model_path = os.path.join(model_dir, *quant["file"].split("/"))
+        os.makedirs(os.path.dirname(model_path), exist_ok=True)
     if os.path.exists(model_path) and gguf_is_valid(model_path):
         size_ok = verify_download_size(quant, model_path, log, fatal=False)
         if size_ok is not False:
@@ -190,6 +191,7 @@ def run_pipeline_llamacpp(model, quant, profile, hw, skip_tests=False, port=8080
 
     log("=== 3/6 Starting llama-server ===")
     server.kill_existing_server(ROOT)
+    _llamacpp_memory_preflight(model, quant, profile, log)
     ctx = catalog.ctx_sizes(model)[profile]
     args = server.build_server_args(model, quant, resolved_model_path, port, profile,
                                     backend=backend, extra_args=extra_server_args)
@@ -235,6 +237,31 @@ def run_pipeline_llamacpp(model, quant, profile, hw, skip_tests=False, port=8080
         log(f"Server left running on http://127.0.0.1:{port}/v1 (pid {proc.pid})")
 
     return {"report": report, "tests": test_results}
+
+
+def _llamacpp_memory_preflight(model, quant, profile, log):
+    """Warn when free VRAM/RAM right now is below the estimate.
+
+    The model and context profile are picked from total capacity (see
+    catalog.fit_verdict), so a busy desktop no longer silently downgrades the
+    recommendation. This check covers the other half: if something else is
+    holding memory at serve time, say so before llama-server spills into
+    shared GPU memory or swap. It only warns; it never changes the pick."""
+    live = hwdetect.detect(ROOT)
+    need_vram, need_ram = catalog.estimate_requirements(model, quant, profile)
+    problems = []
+    if live.vram_free_gb is not None and live.vram_free_gb < need_vram:
+        problems.append(f"~{live.vram_free_gb:.1f} GB VRAM free vs ~{need_vram:.1f} GB wanted")
+    if live.ram_free_gb is not None and live.ram_free_gb < need_ram:
+        problems.append(f"~{live.ram_free_gb:.1f} GB RAM free vs ~{need_ram:.1f} GB wanted")
+    if problems:
+        log("  [preflight] WARNING: " + "; ".join(problems) + ". Other apps are "
+            "holding memory. The server will still start, but it may run slowly "
+            "(shared GPU memory / swap) or fail to load. Close them, or re-run "
+            "with --profile conservative or a smaller quant.")
+    else:
+        log(f"  [preflight] free memory OK (~{need_vram:.1f} GB VRAM / "
+            f"~{need_ram:.1f} GB RAM wanted)")
 
 
 def _mlx_memory_preflight(model, quant, log):
@@ -420,7 +447,7 @@ def parse_args():
     p.add_argument("--quant", help="quant GGUF filename (llama.cpp) or mlx-community repo id "
                                     "(rapid-mlx/macOS) - see --list-models")
     p.add_argument("--profile", choices=["auto", "primary", "conservative"], default="auto",
-                    help="llama.cpp context profile; auto keeps a 1 GB free-VRAM reserve")
+                    help="llama.cpp context profile; auto picks the largest context that fits total VRAM with a 1 GB reserve")
     p.add_argument("--port", type=int, default=None,
                     help="default 8080 for llama.cpp, 8000 for rapid-mlx")
     p.add_argument("--bin-dir", default=None, help="llama.cpp only: reuse an existing llama.cpp folder")

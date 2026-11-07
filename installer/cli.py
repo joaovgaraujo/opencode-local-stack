@@ -18,8 +18,7 @@ def _scored_options(hw):
     for model, quant, profile in catalog.all_variants():
         if not quant.get("default") and profile != "primary":
             continue  # keep the list short: only show conservative profile alongside the default quant
-        verdict = catalog.fit_verdict(model, quant, profile, hw.vram_free_gb or hw.vram_total_gb,
-                                       hw.ram_free_gb, hw.disk_free_gb)
+        verdict = catalog.hw_fit_verdict(model, quant, profile, hw)
         need_vram, need_ram = catalog.estimate_requirements(model, quant, profile)
         options.append({
             "model": model, "quant": quant, "profile": profile, "verdict": verdict,

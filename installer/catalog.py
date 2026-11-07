@@ -227,6 +227,151 @@ MODELS = [
              "size_gb": 9.71},
         ],
     },
+    # ---- Added 2026-11 (newer releases). Filenames and sizes checked against
+    # the HF tree API on 2026-11-07. Not measured on this stack yet: their fit
+    # figures are heuristic only, like every row except Qwen3.6-35B-A3B.
+    {
+        "id": "qwen3.8-27b",
+        "display_name": "Qwen3.8-27B",
+        "arch": "dense",
+        "family": "qwen",
+        "total_params_b": 27,
+        "active_params_b": None,
+        "reasoning": True,
+        "notes": "Dense, fully on GPU. Newest Qwen (2026-08); needs a 24 GB-class GPU "
+                 "at Q4_K_M. Text + tool-calling path only (vision encoder unused).",
+        "quants": [
+            {"label": "Q3_K_XL (compact)", "file": "Qwen3.8-27B-UD-Q3_K_XL.gguf",
+             "repo": "unsloth/Qwen3.8-27B-GGUF", "size_gb": 13.15},
+            {"label": "Q4_K_M (recommended)", "file": "Qwen3.8-27B-UD-Q4_K_M.gguf",
+             "repo": "unsloth/Qwen3.8-27B-GGUF", "size_gb": 16.46, "default": True},
+            {"label": "Q5_K_M (higher quality)", "file": "Qwen3.8-27B-UD-Q5_K_M.gguf",
+             "repo": "unsloth/Qwen3.8-27B-GGUF", "size_gb": 19.77},
+            {"label": "Q6_K (near-lossless)", "file": "Qwen3.8-27B-UD-Q6_K.gguf",
+             "repo": "unsloth/Qwen3.8-27B-GGUF", "size_gb": 21.98},
+            {"label": "Q8_0 (max quality)", "file": "Qwen3.8-27B-Q8_0.gguf",
+             "repo": "unsloth/Qwen3.8-27B-GGUF", "size_gb": 29.05},
+        ],
+        "mlx": [
+            {"label": "4bit (recommended)", "repo": "mlx-community/Qwen3.8-27B-4bit",
+             "size_gb": 16.05, "default": True},
+            {"label": "8bit (max quality)", "repo": "mlx-community/Qwen3.8-27B-8bit",
+             "size_gb": 29.5},
+        ],
+    },
+    {
+        "id": "nemotron-3.5-lightning-30b-a3b",
+        "display_name": "Nemotron 3.5 Lightning 30B-A3B",
+        "arch": "moe",
+        "total_params_b": 33,
+        "active_params_b": 3,
+        "reasoning": True,
+        "notes": "NVIDIA hybrid Mamba-2 + MoE (2026-08), served with --cpu-moe. "
+                 "Few attention layers, so the KV cache stays small at long context. "
+                 "NVIDIA Open Model License.",
+        "quants": [
+            {"label": "Q3_K_XL (compact)",
+             "file": "NVIDIA-Nemotron-3.5-Lightning-30B-A3B-UD-Q3_K_XL.gguf",
+             "repo": "unsloth/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF", "size_gb": 21.24},
+            {"label": "Q4_K_M (recommended)",
+             "file": "NVIDIA-Nemotron-3.5-Lightning-30B-A3B-UD-Q4_K_M.gguf",
+             "repo": "unsloth/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF", "size_gb": 25.27,
+             "default": True},
+            {"label": "Q5_K_M (higher quality)",
+             "file": "NVIDIA-Nemotron-3.5-Lightning-30B-A3B-UD-Q5_K_M.gguf",
+             "repo": "unsloth/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF", "size_gb": 30.22},
+            {"label": "Q8_0 (max quality)",
+             "file": "NVIDIA-Nemotron-3.5-Lightning-30B-A3B-Q8_0.gguf",
+             "repo": "unsloth/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF", "size_gb": 35.0},
+        ],
+        "mlx": [
+            {"label": "4bit (recommended)",
+             "repo": "mlx-community/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-4bit",
+             "size_gb": 17.78, "default": True},
+            {"label": "8bit (max quality)",
+             "repo": "mlx-community/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-8bit",
+             "size_gb": 33.56},
+        ],
+    },
+    {
+        "id": "lfm2.5-24b-a2b",
+        "display_name": "LFM2.5-24B-A2B",
+        "arch": "moe",
+        "total_params_b": 24,
+        "active_params_b": 2,
+        "reasoning": True,
+        "notes": "Liquid AI MoE (2026-10), 2.45B active, served with --cpu-moe. "
+                 "Text-only, built for on-device agents. 128K max context. "
+                 "LFM Open License.",
+        "quants": [
+            {"label": "Q3_K_XL (compact)", "file": "LFM2.5-24B-A2B-UD-Q3_K_XL.gguf",
+             "repo": "unsloth/LFM2.5-24B-A2B-GGUF", "size_gb": 10.95},
+            {"label": "Q4_K_XL (recommended)", "file": "LFM2.5-24B-A2B-UD-Q4_K_XL.gguf",
+             "repo": "unsloth/LFM2.5-24B-A2B-GGUF", "size_gb": 14.88, "default": True},
+            {"label": "Q6_K_XL (near-lossless)", "file": "LFM2.5-24B-A2B-UD-Q6_K_XL.gguf",
+             "repo": "unsloth/LFM2.5-24B-A2B-GGUF", "size_gb": 21.86},
+            {"label": "Q8_0 (max quality)", "file": "LFM2.5-24B-A2B-Q8_0.gguf",
+             "repo": "unsloth/LFM2.5-24B-A2B-GGUF", "size_gb": 25.49},
+        ],
+        "mlx": [
+            {"label": "4bit (recommended)", "repo": "LiquidAI/LFM2.5-24B-A2B-MLX-4bit",
+             "size_gb": 13.57, "default": True},
+            {"label": "6bit (higher quality)", "repo": "LiquidAI/LFM2.5-24B-A2B-MLX-6bit",
+             "size_gb": 19.49},
+            {"label": "8bit (max quality)", "repo": "LiquidAI/LFM2.5-24B-A2B-MLX-8bit",
+             "size_gb": 25.48},
+        ],
+    },
+    {
+        "id": "ornith-1.0-9b",
+        "display_name": "Ornith-1.0-9B",
+        "arch": "dense",
+        "family": "qwen",
+        "total_params_b": 9,
+        "active_params_b": None,
+        "reasoning": True,
+        "notes": "Dense, fully on GPU. Agentic-coding fine-tune of Qwen3.5-9B by "
+                 "deepreinforce-ai (2026-07), MIT licensed. Same footprint as Qwen3.5-9B.",
+        "quants": [
+            {"label": "Q4_K_M (recommended)", "file": "Ornith-1.0-9B-Q4_K_M.gguf",
+             "repo": "unsloth/Ornith-1.0-9B-GGUF", "size_gb": 5.7, "default": True},
+            {"label": "Q5_K_M (higher quality)", "file": "Ornith-1.0-9B-Q5_K_M.gguf",
+             "repo": "unsloth/Ornith-1.0-9B-GGUF", "size_gb": 6.54},
+            {"label": "Q6_K (near-lossless)", "file": "Ornith-1.0-9B-Q6_K.gguf",
+             "repo": "unsloth/Ornith-1.0-9B-GGUF", "size_gb": 7.48},
+            {"label": "Q8_0 (max quality)", "file": "Ornith-1.0-9B-Q8_0.gguf",
+             "repo": "unsloth/Ornith-1.0-9B-GGUF", "size_gb": 9.53},
+        ],
+        "mlx": [
+            {"label": "4bit (recommended)", "repo": "mlx-community/Ornith-1.0-9B-4bit",
+             "size_gb": 5.95, "default": True},
+            {"label": "6bit (higher quality)", "repo": "mlx-community/Ornith-1.0-9B-6bit",
+             "size_gb": 8.19},
+            {"label": "8bit (max quality)", "repo": "mlx-community/Ornith-1.0-9B-8bit",
+             "size_gb": 10.43},
+        ],
+    },
+    {
+        "id": "nemotron-3.5-bolt-e4b",
+        "display_name": "Nemotron 3.5 Bolt E4B",
+        "arch": "dense",
+        "family": "gemma",
+        "total_params_b": 4,
+        "active_params_b": None,
+        "reasoning": True,
+        "notes": "Dense, fully on GPU. NVIDIA post-train of Gemma 4 E4B (2026-10). "
+                 "llama.cpp only: no plain 4/6/8-bit MLX build exists yet.",
+        "quants": [
+            {"label": "Q3_K_XL (compact)", "file": "NVIDIA-Nemotron-3.5-Bolt-E4B-UD-Q3_K_XL.gguf",
+             "repo": "unsloth/NVIDIA-Nemotron-3.5-Bolt-E4B-GGUF", "size_gb": 4.22},
+            {"label": "Q4_K_XL (recommended)", "file": "NVIDIA-Nemotron-3.5-Bolt-E4B-UD-Q4_K_XL.gguf",
+             "repo": "unsloth/NVIDIA-Nemotron-3.5-Bolt-E4B-GGUF", "size_gb": 5.06,
+             "default": True},
+            {"label": "Q6_K_XL (near-lossless)", "file": "NVIDIA-Nemotron-3.5-Bolt-E4B-UD-Q6_K_XL.gguf",
+             "repo": "unsloth/NVIDIA-Nemotron-3.5-Bolt-E4B-GGUF", "size_gb": 7.26},
+        ],
+        "mlx": [],
+    },
 ]
 
 
@@ -256,13 +401,16 @@ def download_url(quant):
 
 
 def get_mlx_quant(model, repo):
-    for q in model["mlx"]:
+    for q in model.get("mlx", []):
         if q["repo"] == repo:
             return q
     raise KeyError(f"Unknown MLX repo {repo!r} for model {model['id']}")
 
 
 def default_mlx_quant(model):
+    if not model.get("mlx"):
+        raise KeyError(f"{model['id']} has no MLX build; it runs on the llama.cpp "
+                       f"engine (Windows/Linux) only")
     for q in model["mlx"]:
         if q.get("default"):
             return q
@@ -287,7 +435,15 @@ def estimate_requirements(model, quant, profile="primary"):
 
 
 def fit_verdict(model, quant, profile, vram_gb, ram_gb, disk_free_gb):
-    """Classify fit while reserving room for the desktop and transient buffers."""
+    """Classify fit against the machine's TOTAL VRAM and RAM.
+
+    Callers pass hw.vram_total_gb / hw.ram_total_gb, not the free figures.
+    Free memory is a snapshot of whatever else happened to be open when the
+    installer ran (a browser, a game, another model server), so ranking on it
+    made the recommended model change from run to run on the same machine. The
+    reserves below stand in for the OS/desktop baseline instead. Whether there
+    is room *right now* is checked separately at serve time by install.py's
+    memory preflight, which warns but never changes the pick."""
     need_vram, need_ram = estimate_requirements(model, quant, profile)
     if disk_free_gb is not None and disk_free_gb < quant["size_gb"] + 2:
         return "no"
@@ -303,16 +459,18 @@ def fit_verdict(model, quant, profile, vram_gb, ram_gb, disk_free_gb):
     return "no"
 
 
-def recommended_profile(model, quant, hw):
-    """Choose maximum useful context only when measured free memory has reserve.
+def hw_fit_verdict(model, quant, profile, hw):
+    """fit_verdict against the detected hardware's total capacity."""
+    return fit_verdict(model, quant, profile, hw.vram_total_gb, hw.ram_total_gb,
+                       hw.disk_free_gb)
 
-    The validated 8 GB-class Qwen3.6/Q4_K_M setup keeps 65K context when
-    at least 1 GB remains beyond the estimate; a busy GPU falls back to 32K.
-    """
-    vram = hw.vram_free_gb if hw.vram_free_gb is not None else hw.vram_total_gb
+
+def recommended_profile(model, quant, hw):
+    """Choose the largest context that fits the machine's total memory with
+    the desktop reserve kept. Based on capacity, not free memory, so the same
+    machine always gets the same recommendation (see fit_verdict)."""
     for profile in ("primary", "conservative"):
-        if fit_verdict(model, quant, profile, vram, hw.ram_free_gb,
-                       hw.disk_free_gb) == "fits":
+        if hw_fit_verdict(model, quant, profile, hw) == "fits":
             return profile
     return "conservative"
 
@@ -330,7 +488,12 @@ def all_variants():
 def _mlx_kv_factor(model):
     """KV + prefill working-set weight, per GB of model weights, by family.
     Gemma dense attention is heavy (measured); Qwen GQA is not.
-    See the MLX_KV_FACTOR comment block for the two measured anchor runs."""
+    See the MLX_KV_FACTOR comment block for the two measured anchor runs.
+    A model's explicit "family" key wins over its id prefix (fine-tunes such as
+    Ornith keep their base model's attention layout under a different name)."""
+    family = model.get("family")
+    if family is not None:
+        return MLX_KV_FACTOR.get(family, MLX_KV_FACTOR_DEFAULT)
     mid = model["id"]
     for family, factor in MLX_KV_FACTOR.items():
         if mid.startswith(family):

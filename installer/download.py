@@ -10,6 +10,7 @@ import urllib.request
 import zipfile
 
 LLAMACPP_LATEST_RELEASE_API = "https://api.github.com/repos/ggml-org/llama.cpp/releases/latest"
+LLAMACPP_TAG_RELEASE_API = "https://api.github.com/repos/ggml-org/llama.cpp/releases/tags/{tag}"
 
 # (backend, os_name) -> list of regexes to try in order against release asset
 # names; the first asset matched wins. Verified against a real "latest"
@@ -18,7 +19,8 @@ ASSET_PATTERNS = {
     ("cuda", "Windows"): [r"^llama-.*-bin-win-cuda-12\.\d+-x64\.zip$",
                           r"^llama-.*-bin-win-cuda-\d+.*-x64\.zip$"],
     ("vulkan", "Windows"): [r"^llama-.*-bin-win-vulkan-x64\.zip$"],
-    ("rocm", "Windows"): [r"^llama-.*-bin-win-hip-radeon-x64\.zip$"],
+    ("rocm", "Windows"): [r"^llama-.*-bin-win-rocm-[\d.]+-x64\.zip$",
+                          r"^llama-.*-bin-win-hip-radeon-x64\.zip$"],
     ("cpu", "Windows"): [r"^llama-.*-bin-win-cpu-x64\.zip$"],
     ("vulkan", "Linux"): [r"^llama-.*-bin-ubuntu-vulkan-x64\.tar\.gz$"],
     ("rocm", "Linux"): [r"^llama-.*-bin-ubuntu-rocm-[\d.]+-x64\.tar\.gz$"],
@@ -47,6 +49,19 @@ def resolve_llamacpp_assets(backend, os_name):
 
     release = _fetch_json(LLAMACPP_LATEST_RELEASE_API)
     assets = release.get("assets", [])
+    # Since v0.9.0 (2026-11) "latest" is a versioned release that ships only
+    # nightly-tag.txt, naming the bNNNN build release that holds the binaries
+    # (those builds are now marked prerelease, so /latest skips them).
+    if not any(a["name"].startswith("llama-") for a in assets):
+        pointer = next((a for a in assets if a["name"] == "nightly-tag.txt"), None)
+        if pointer:
+            req = urllib.request.Request(pointer["browser_download_url"],
+                                         headers={"User-Agent": "opencode-local-installer"})
+            with urllib.request.urlopen(req, timeout=30) as r:
+                tag = r.read().decode("utf-8", "replace").strip()
+            if re.fullmatch(r"b\d+", tag):
+                release = _fetch_json(LLAMACPP_TAG_RELEASE_API.format(tag=tag))
+                assets = release.get("assets", [])
 
     def match_first(pats):
         for pat in pats:
