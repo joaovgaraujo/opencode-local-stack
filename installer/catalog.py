@@ -30,7 +30,9 @@ HF_RESOLVE = "https://huggingface.co/{repo}/resolve/main/{file}"
 # Fit-heuristic constants. These are conservative estimates, not measurements -
 # tests/validate.py + tests/vram_logger.ps1|sh give you real numbers for your
 # machine after install. See docs/MODELS.md "How the fit estimate works".
-MOE_VRAM_BASE_GB = {65536: 4.5, 32768: 3.8, 16384: 3.4}
+MOE_VRAM_BASE_GB = {262144: 5.8, 131072: 5.0, 65536: 4.5, 32768: 3.8, 16384: 3.4}
+# 262144: Qwen3.6-35B-A3B Q4_K_M measured +5.4 GB with --cpu-moe and q8_0 KV on CUDA
+# (2026-11-07); 131072 is interpolated. Dense models are only measured to 32768.
 MOE_RAM_OVERHEAD_GB = 4.0          # on top of the quant file size
 DENSE_VRAM_OVERHEAD_GB = {32768: 2.5, 16384: 1.5}   # on top of the quant file size
 DENSE_RAM_OVERHEAD_GB = 3.0         # OS + mmap bookkeeping only; weights live on GPU
@@ -323,6 +325,36 @@ MODELS = [
         ],
     },
     {
+        "id": "ornith-1.0-35b",
+        "display_name": "Ornith-1.0-35B",
+        "arch": "moe",
+        "family": "qwen",
+        "total_params_b": 35,
+        "active_params_b": 3,
+        "reasoning": True,
+        "notes": "MoE, served with --cpu-moe. Agentic-coding fine-tune of Qwen3.5-35B-A3B by "
+                 "deepreinforce-ai (2026-07), MIT. Its card reports SWE-bench Verified 75.6 and "
+                 "Terminal-Bench 2.1 64.2 vs 73.4 / 52.5 for Qwen3.6-35B-A3B.",
+        "quants": [
+            {"label": "Q3_K_XL (compact)", "file": "Ornith-1.0-35B-UD-Q3_K_XL.gguf",
+             "repo": "unsloth/Ornith-1.0-35B-GGUF", "size_gb": 16.8},
+            {"label": "Q4_K_M (recommended)", "file": "Ornith-1.0-35B-UD-Q4_K_M.gguf",
+             "repo": "unsloth/Ornith-1.0-35B-GGUF", "size_gb": 22.13, "default": True},
+            {"label": "Q5_K_M (higher quality)", "file": "Ornith-1.0-35B-UD-Q5_K_M.gguf",
+             "repo": "unsloth/Ornith-1.0-35B-GGUF", "size_gb": 26.46},
+            {"label": "Q8_0 (max quality)", "file": "Ornith-1.0-35B-Q8_0.gguf",
+             "repo": "unsloth/Ornith-1.0-35B-GGUF", "size_gb": 36.9},
+        ],
+        "mlx": [
+            {"label": "4bit (recommended)", "repo": "mlx-community/Ornith-1.0-35B-4bit",
+             "size_gb": 20.4, "default": True},
+            {"label": "6bit (higher quality)", "repo": "mlx-community/Ornith-1.0-35B-6bit",
+             "size_gb": 29.06},
+            {"label": "8bit (max quality)", "repo": "mlx-community/Ornith-1.0-35B-8bit",
+             "size_gb": 37.72},
+        ],
+    },
+    {
         "id": "ornith-1.0-9b",
         "display_name": "Ornith-1.0-9B",
         "arch": "dense",
@@ -418,7 +450,18 @@ def default_mlx_quant(model):
 
 
 def ctx_sizes(model):
+    """Context per profile. install.py --ctx sets model["ctx_override"], which
+    replaces both profiles with one fixed size."""
+    override = model.get("ctx_override")
+    if override:
+        return {"primary": override, "conservative": override}
     return CTX_PROFILES[model["arch"]]
+
+
+def _nearest_up(table, ctx):
+    """Value for the smallest tabulated context >= ctx (largest if beyond)."""
+    keys = sorted(table)
+    return table[next((k for k in keys if k >= ctx), keys[-1])]
 
 
 def estimate_requirements(model, quant, profile="primary"):
@@ -426,10 +469,10 @@ def estimate_requirements(model, quant, profile="primary"):
     See the module docstring - these are heuristics, not measurements."""
     ctx = ctx_sizes(model)[profile]
     if model["arch"] == "moe":
-        vram = MOE_VRAM_BASE_GB.get(ctx, 4.5)
+        vram = _nearest_up(MOE_VRAM_BASE_GB, ctx)
         ram = quant["size_gb"] + MOE_RAM_OVERHEAD_GB
     else:
-        vram = quant["size_gb"] + DENSE_VRAM_OVERHEAD_GB.get(ctx, 2.5)
+        vram = quant["size_gb"] + _nearest_up(DENSE_VRAM_OVERHEAD_GB, ctx)
         ram = DENSE_RAM_OVERHEAD_GB
     return round(vram, 1), round(ram, 1)
 

@@ -448,6 +448,10 @@ def parse_args():
                                     "(rapid-mlx/macOS) - see --list-models")
     p.add_argument("--profile", choices=["auto", "primary", "conservative"], default="auto",
                     help="llama.cpp context profile; auto picks the largest context that fits total VRAM with a 1 GB reserve")
+    p.add_argument("--ctx", type=int, default=None, metavar="TOKENS",
+                    help="fixed context size instead of a profile, e.g. 131072 or 262144 "
+                         "(MoE models hold 262144 in ~5.4 GB VRAM; dense models are only "
+                         "measured to 32768). Also sets the OpenCode context limit")
     p.add_argument("--port", type=int, default=None,
                     help="default 8080 for llama.cpp, 8000 for rapid-mlx")
     p.add_argument("--bin-dir", default=None, help="llama.cpp only: reuse an existing llama.cpp folder")
@@ -518,6 +522,8 @@ def main():
 
             def pipeline_for_gui(m, q, prof, hw_, skip_tests, install_node, log, progress):
                 args.install_node = install_node
+                if args.ctx:
+                    m = dict(m, ctx_override=args.ctx)
                 _dispatch(m, q, prof, hw_, engine, port, args, skip_tests, log, progress)
 
             gui.run_gui(hw, pipeline_for_gui)
@@ -529,6 +535,14 @@ def main():
             else:
                 model, quant, args.profile = cli.choose_model_quant(hw)
 
+    if args.ctx:
+        model = dict(model, ctx_override=args.ctx)
+        if engine != "rapidmlx" and args.profile == "auto":
+            args.profile = "primary"
+        print(f"Context fixed at {args.ctx:,} tokens (--ctx).")
+        if engine != "rapidmlx" and catalog.hw_fit_verdict(model, quant, args.profile, hw) == "no":
+            print("  [WARN] estimated not to fit at this context on this machine; "
+                  "llama-server may fail to load. Try a smaller --ctx.")
     if engine != "rapidmlx" and args.profile == "auto":
         args.profile = catalog.recommended_profile(model, quant, hw)
         print(f"Auto-selected {args.profile} context profile "

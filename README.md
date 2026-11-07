@@ -5,7 +5,7 @@ coding agent as the frontend. Works on Windows, Linux, and macOS/Apple Silicon.
 One command detects your hardware, downloads a model that fits, serves it, and
 validates the stack.
 
-The catalog has eleven models, from Qwen3.8-27B and Qwen3.6-35B-A3B down to
+The catalog has twelve models, from Qwen3.8-27B and Qwen3.6-35B-A3B down to
 Qwen3.5-4B, each in several quantizations. The installer ranks every
 combination against your machine's total VRAM and RAM, so the recommendation
 stays the same whatever else happens to be open, and warns at start-up if
@@ -50,6 +50,14 @@ python install.py --list-models              # every model id, quant, and size
 python install.py --model qwen3.5-9b --non-interactive
 python install.py --cli                      # text wizard, no GUI
 python install.py --skip-tests               # just start the server
+python install.py --model qwen3.6-35b-a3b --ctx 262144   # full 262K context (MoE: ~5.4 GB VRAM)
+```
+
+`--model-path` serves any GGUF you already have under a catalog entry with the
+same architecture, e.g. a fine-tune of Qwen3.6-35B-A3B:
+
+```
+python install.py --model qwen3.6-35b-a3b --model-path models/<file>.gguf --ctx 262144 --non-interactive
 ```
 
 Node.js is required for OpenCode and is never installed without your say-so.
@@ -62,7 +70,7 @@ nothing touches the system; delete the directory to undo).
 
 ## Pick a model
 
-The five rows at the bottom were added in 2026-11 and have not been run on
+The six rows at the bottom were added in 2026-11 and have not been run on
 this stack yet. The RAM and VRAM columns below are conservative estimates from the fit
 heuristic in `installer/catalog.py`, not measurements. The exception is
 Qwen3.6-35B-A3B, which was measured on real hardware (see
@@ -81,6 +89,7 @@ for how the estimate is computed. Re-measure on your own machine with
 | **Qwen3.8-27B** | Dense | 16.5 GB | 18.0–19.0 GB (est.) | ~3 GB (est.) | Newest Qwen (2026-08). Needs a 24 GB-class GPU |
 | **Nemotron 3.5 Lightning 30B-A3B** | Hybrid Mamba/MoE 33B/3B active | 25.3 GB | 3.8–4.5 GB (est.) | 29.3 GB (est.) | NVIDIA, `--cpu-moe`; needs 32 GB+ RAM |
 | **LFM2.5-24B-A2B** | MoE 24B/2.45B active | 14.9 GB | 3.8–4.5 GB (est.) | 18.9 GB (est.) | Liquid AI, `--cpu-moe`; text-only, 128K max context |
+| **Ornith-1.0-35B** | MoE 35B/3B active | 22.1 GB | 3.8–4.5 GB (est.) | 26.1 GB (est.) | Coding-agent fine-tune of Qwen3.5-35B-A3B (MIT). Its card: SWE-bench Verified 75.6, Terminal-Bench 2.1 64.2 (Qwen3.6-35B-A3B: 73.4 / 52.5) |
 | **Ornith-1.0-9B** | Dense | 5.7 GB | 7.2–8.2 GB (est.) | ~3 GB (est.) | Agentic-coding fine-tune of Qwen3.5-9B (MIT) |
 | **Nemotron 3.5 Bolt E4B** | Dense | 5.1 GB | 6.6–7.6 GB (est.) | ~3 GB (est.) | NVIDIA post-train of Gemma 4 E4B; llama.cpp only (no MLX build) |
 
