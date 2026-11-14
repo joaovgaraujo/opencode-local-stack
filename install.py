@@ -400,6 +400,10 @@ def _setup_opencode(model_id, port, install_node, log, provider_key="llamacpp"):
     results = {}
     node = opencode_setup.find_node()
     if not node:
+        # Node may already be installed in a terminal opened before its PATH change
+        opencode_setup.refresh_windows_path()
+        node = opencode_setup.find_node()
+    if not node:
         if install_node:
             node = opencode_setup.try_install_node(log)
         if not node:
@@ -410,6 +414,9 @@ def _setup_opencode(model_id, port, install_node, log, provider_key="llamacpp"):
     opencode_setup.npm_install_opencode(log)
     dest = opencode_setup.install_config(os.path.join(ROOT, "opencode.json"))
     log(f"  opencode.json -> {dest}")
+    if not opencode_setup.ensure_opencode_on_path(log):
+        results["opencode-agentic"] = "FAIL"
+        return results
     scratch = os.path.join(ROOT, "opencode-scratch")
     alias = f"{provider_key}/{model_id}"
     log("  warm-up run (first run downloads ripgrep once - needs internet)")

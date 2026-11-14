@@ -38,9 +38,36 @@ def node_install_hint():
             "    (or install via nvm: https://github.com/nvm-sh/nvm)")
 
 
+def refresh_windows_path():
+    """winget and the Node installer write PATH to the registry; a running
+    process (this one, or a terminal opened earlier) keeps its old copy.
+    Reload machine + user PATH so node, npm and opencode are found now."""
+    if platform.system() != "Windows":
+        return
+    import winreg
+    parts = []
+    for hive, key in ((winreg.HKEY_LOCAL_MACHINE,
+                       r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment"),
+                      (winreg.HKEY_CURRENT_USER, "Environment")):
+        try:
+            with winreg.OpenKey(hive, key) as k:
+                parts.append(os.path.expandvars(winreg.QueryValueEx(k, "Path")[0]))
+        except OSError:
+            pass
+    parts.append(os.environ.get("PATH", ""))
+    seen, merged = set(), []
+    for entry in os.pathsep.join(parts).split(os.pathsep):
+        key = entry.strip().rstrip("\\").lower()
+        if key and key not in seen:  # keep it short: cmd.exe chokes on a huge PATH
+            seen.add(key)
+            merged.append(entry.strip())
+    os.environ["PATH"] = os.pathsep.join(merged)
+
+
 def install_node_windows():
     subprocess.run(["winget", "install", "-e", "--id", "OpenJS.NodeJS.LTS",
                      "--accept-source-agreements", "--accept-package-agreements"])
+    refresh_windows_path()
     return find_node()
 
 
@@ -52,7 +79,7 @@ def install_node_macos():
     return find_node()
 
 
-NODE_VERSION = "22.22.1"  # LTS; matches the version this stack was validated with
+NODE_VERSION = "26.13.1"  # current LTS (Lithium)
 
 _LINUX_NODE_ARCHES = {"x86_64": "x64", "amd64": "x64", "aarch64": "arm64", "arm64": "arm64"}
 
@@ -114,8 +141,8 @@ def try_install_node(log):
     return None
 
 
-OPENCODE_VERSION = "1.18.4"
-OPENAI_COMPAT_VERSION = "3.0.14"
+OPENCODE_VERSION = "1.19.5"
+OPENAI_COMPAT_VERSION = "3.0.92"
 
 
 def npm_install_opencode(log):
@@ -127,7 +154,56 @@ def npm_install_opencode(log):
     tail = (r.stdout or "").strip().splitlines()[-3:]
     if tail:
         log("\n".join(tail))
+    if r.returncode != 0:
+        log("npm install failed:\n" + "\n".join((r.stderr or "").strip().splitlines()[-5:]))
     return r.returncode == 0
+
+
+def npm_global_bin():
+    """Folder where `npm install -g` puts the opencode launcher."""
+    npm = find_npm()
+    if not npm:
+        return None
+    try:
+        r = subprocess.run([npm, "prefix", "-g"], capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", timeout=60,
+                           shell=(platform.system() == "Windows"))
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    prefix = (r.stdout or "").strip()
+    if not prefix:
+        return None
+    return prefix if platform.system() == "Windows" else os.path.join(prefix, "bin")
+
+
+def ensure_opencode_on_path(log):
+    """Make `opencode` callable from this process and tell the user how to
+    reach it from their own terminal. Returns True when it was found."""
+    if shutil.which("opencode"):
+        on_path = True
+    else:
+        on_path = False
+        bin_dir = npm_global_bin()
+        if bin_dir and os.path.isdir(bin_dir):
+            os.environ["PATH"] = bin_dir + os.pathsep + os.environ.get("PATH", "")
+        if not shutil.which("opencode"):
+            log("  OpenCode was not found after npm install; run "
+                "`npm install -g opencode-ai` by hand and check its output.")
+            return False
+    exe = shutil.which("opencode")
+    if not on_path:
+        folder = os.path.dirname(exe)
+        log(f"  NOTE: OpenCode is in {folder}, which your terminal's PATH may not include.")
+        if platform.system() == "Windows":
+            log("  Open a NEW PowerShell window before running `opencode`. If it is still "
+                "not recognized, run it once as:")
+            log(f'    & "{exe}"')
+            log("  or add the folder to your user PATH:")
+            log(f"    [Environment]::SetEnvironmentVariable('Path', "
+                f"[Environment]::GetEnvironmentVariable('Path','User') + ';{folder}', 'User')")
+        else:
+            log(f'  Add it to your shell: export PATH="{folder}:$PATH"')
+    return True
 
 
 def opencode_config_dir():

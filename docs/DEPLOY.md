@@ -91,7 +91,7 @@ Both take overrides: `run.ps1 -Port 8081 -CtxSize 32768` /
 
 Point OpenCode at it by hand:
 ```
-npm install -g opencode-ai@1.18.4 @ai-sdk/openai-compatible@3.0.14
+npm install -g opencode-ai@1.19.5 @ai-sdk/openai-compatible@3.0.92
 # Windows: copy .\opencode.json "$env:USERPROFILE\.config\opencode\opencode.json"
 # Linux:   cp ./opencode.json ~/.config/opencode/opencode.json
 opencode      # then /models -> pick the local one

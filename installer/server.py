@@ -25,6 +25,34 @@ def find_server_binary(bin_dir):
     return None
 
 
+KV_K_FLAGS = ("-ctk", "--cache-type-k")
+KV_V_FLAGS = ("-ctv", "--cache-type-v")
+LOAD_FLAGS = ("-lm", "--load-mode", "--mmap", "--no-mmap")
+
+
+def user_sets(extra_args, flags):
+    """True when the user's extra args already pass one of these flags, so the
+    installer's own default for it is left out (no duplicate-flag warnings)."""
+    return any(a in flags or a.split("=", 1)[0] in flags for a in (extra_args or []))
+
+
+def defaults_for(arch, backend, extra_args):
+    """Which installer defaults apply, given the user's extra args.
+
+    With the experts in RAM (--cpu-moe), reading the weights into memory up
+    front beats memory-mapping them: on Qwen3.6-35B-A3B at 262K (RTX 4090,
+    official llama.cpp) --load-mode none took prefill from 944 to 1453 tok/s
+    and decode from 45 to 51 tok/s. It uses the RAM the fit check already
+    reserves for the model; loading takes a little longer."""
+    moe = backend != "cpu" and arch == "moe"
+    return {
+        "moe": moe,
+        "kv_k": not user_sets(extra_args, KV_K_FLAGS),
+        "kv_v": not user_sets(extra_args, KV_V_FLAGS),
+        "load_none": moe and not user_sets(extra_args, LOAD_FLAGS),
+    }
+
+
 def build_server_args(model, quant, model_path, port, profile, kv_type="q8_0", backend=None,
                       extra_args=None):
     from . import catalog
@@ -36,18 +64,21 @@ def build_server_args(model, quant, model_path, port, profile, kv_type="q8_0", b
         "--alias", model["id"],
         "--ctx-size", str(ctx),
         "--flash-attn", "on",
-        "-ctk", kv_type,
-        "-ctv", kv_type,
-        "--jinja",
-        "--host", "127.0.0.1",
-        "--port", str(port),
     ]
+    d = defaults_for(model["arch"], backend, extra_args)
+    if d["kv_k"]:
+        args += ["-ctk", kv_type]
+    if d["kv_v"]:
+        args += ["-ctv", kv_type]
+    args += ["--jinja", "--host", "127.0.0.1", "--port", str(port)]
     if backend == "cpu":
         args += ["--n-gpu-layers", "0"]
     else:
         args += ["--n-gpu-layers", "999"]
-        if model["arch"] == "moe":
+        if d["moe"]:
             args += ["--cpu-moe"]
+    if d["load_none"]:
+        args += ["--load-mode", "none"]
     return args + list(extra_args or [])
 
 
@@ -237,8 +268,15 @@ def write_run_scripts(root, bin_dir, model_path, model_id, arch, port, ctx, kv_t
     segment containing one would otherwise execute when the script runs.
     """
     n_gpu_layers = "0" if backend == "cpu" else "999"
-    moe_flag = (backend != "cpu" and arch == "moe")
     extra_args = list(extra_args or [])
+    d = defaults_for(arch, backend, extra_args)
+    moe_flag = d["moe"]
+    kv_on = [f for f, on in (("-ctk", d["kv_k"]), ("-ctv", d["kv_v"])) if on]
+    ps_kv = "".join(f'    "{f}", $KvType,\n' for f in kv_on)
+    ps_load = '    "--load-mode", "none",\n' if d["load_none"] else ""
+    sh_kv = " ".join(f'{f} "$KV_TYPE"' for f in kv_on)
+    sh_kv_line = f"    {sh_kv} \\\n" if sh_kv else ""
+    sh_load = "    --load-mode none \\\n" if d["load_none"] else ""
     extra_ps_entries = "".join(f",\n    {_ps1_single_quoted(arg)}" for arg in extra_args)
     extra_sh_words = " ".join(_sh_quoted(arg) for arg in extra_args)
 
@@ -269,9 +307,7 @@ $serverArgs = @(
 {'    "--cpu-moe",' if moe_flag else ''}
     "--ctx-size", "$CtxSize",
     "--flash-attn", "on",
-    "-ctk", $KvType,
-    "-ctv", $KvType,
-    "--jinja",
+{ps_kv}{ps_load}    "--jinja",
     "--host", "127.0.0.1",
     "--port", "$Port"{extra_ps_entries}
 )
@@ -319,8 +355,7 @@ exec "$SERVER" \\
     --n-gpu-layers {n_gpu_layers} \\
 {moe_line}    --ctx-size "$CTX_SIZE" \\
     --flash-attn on \\
-    -ctk "$KV_TYPE" -ctv "$KV_TYPE" \\
-    --jinja \\
+{sh_kv_line}{sh_load}    --jinja \\
     --host 127.0.0.1 --port "$PORT" \\
     "${{EXTRA_ARGS[@]}}"
 """

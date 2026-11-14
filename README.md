@@ -118,7 +118,17 @@ fit, and CUDA-vs-Vulkan speed for the original six models on one machine:
 - These are reasoning models. They emit `<think>` tokens in a separate
   `reasoning_content` field before the answer, so give them `max_tokens` of
   1024 or more or `content` can come back empty. OpenCode handles this
-  natively.
+  natively. To turn thinking off, add
+  `--extra-server-arg=--reasoning --extra-server-arg off`. Answers come back
+  much faster and use far fewer tokens, at some cost on hard problems.
+- Start OpenCode with `.\run.ps1` (or `./run.sh`) in one terminal, then
+  `opencode` in your project folder. If Windows says `opencode` is not
+  recognized, open a new PowerShell window so it picks up the PATH the Node
+  installer changed. The installer also prints the full path to run.
+- MoE models keep their experts in RAM (`--cpu-moe`), so the GPU looks mostly
+  idle while the CPU works; that is expected. They load with
+  `--load-mode none` (no mmap), which measured about 50% faster prompt
+  processing and 14% faster generation than memory-mapping.
 - tok/s never transfers between machines. It depends on your GPU clocks,
   thermals, and RAM bandwidth. Re-measure with `tests/validate.py` and
   `tests/vram_logger.ps1`, or an `nvidia-smi -l` loop on Linux.
