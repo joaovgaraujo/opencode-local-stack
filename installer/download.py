@@ -37,9 +37,29 @@ def _fetch_json(url):
         return json.load(r)
 
 
-def resolve_llamacpp_assets(backend, os_name):
-    """Return dict {'binary': asset_dict, 'cudart': asset_dict|None} for the
-    given backend/os, or raise RuntimeError if nothing matches."""
+def _cuda_version(name):
+    m = re.search(r"-cuda-(\d+)\.(\d+)-", name)
+    return (int(m.group(1)), int(m.group(2))) if m else None
+
+
+def pick_cuda_asset(assets, prefix, cuda_driver):
+    """Newest x64 CUDA build of `prefix` ("llama-" or "cudart-") the driver
+    can run; the oldest one when the driver version is unknown or too old
+    for all of them (12.4 runs on any recent driver)."""
+    cands = [(v, a) for a in assets
+             if a["name"].startswith(prefix) and "-win-cuda-" in a["name"]
+             and a["name"].endswith("-x64.zip") and (v := _cuda_version(a["name"]))]
+    if not cands:
+        return None
+    cands.sort(key=lambda c: c[0])
+    ok = [c for c in cands if cuda_driver and c[0] <= tuple(cuda_driver)]
+    return (ok[-1] if ok else cands[0])[1]
+
+
+def resolve_llamacpp_assets(backend, os_name, cuda_driver=None):
+    """Return dict {'binary': asset_dict, 'cudart': asset_dict|None, 'tag'}
+    for the given backend/os, or raise RuntimeError if nothing matches.
+    cuda_driver = (major, minor) from nvidia-smi picks the CUDA build."""
     if os_name not in ("Windows", "Linux"):
         raise RuntimeError(f"No prebuilt llama.cpp release for OS {os_name!r}. "
                             f"Build from source: https://github.com/ggml-org/llama.cpp")
@@ -70,12 +90,18 @@ def resolve_llamacpp_assets(backend, os_name):
                     return a
         return None
 
-    binary = match_first(patterns)
+    binary = (pick_cuda_asset(assets, "llama-", cuda_driver)
+              if (backend, os_name) == ("cuda", "Windows") else None) or match_first(patterns)
     if not binary:
         raise RuntimeError(f"Could not find a llama.cpp release asset matching {patterns} "
                             f"in release {release.get('tag_name')}. "
                             f"Check https://github.com/ggml-org/llama.cpp/releases/latest")
-    cudart = match_first(CUDART_PATTERNS) if backend == "cuda" else None
+    cudart = None
+    if backend == "cuda":
+        want = _cuda_version(binary["name"])
+        cudart = next((a for a in assets if a["name"].startswith("cudart-")
+                       and _cuda_version(a["name"]) == want and a["name"].endswith("-x64.zip")),
+                      None) or match_first(CUDART_PATTERNS)
     return {"binary": binary, "cudart": cudart, "tag": release.get("tag_name")}
 
 

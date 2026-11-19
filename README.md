@@ -2,71 +2,142 @@
 
 Run a local LLM on your own machine with the [OpenCode](https://opencode.ai)
 coding agent as the frontend. Works on Windows, Linux, and macOS/Apple Silicon.
-One command detects your hardware, downloads a model that fits, serves it, and
-validates the stack.
+The installer detects your hardware, downloads a model that fits, serves it
+with llama.cpp, and tests the whole stack, including an OpenCode run that
+writes and executes a file.
 
-The catalog has twelve models, from Qwen3.8-27B and Qwen3.6-35B-A3B down to
-Qwen3.5-4B, each in several quantizations. The installer ranks every
-combination against your machine's total VRAM and RAM, so the recommendation
-stays the same whatever else happens to be open, and warns at start-up if
-other apps are holding the memory the model needs.
+Models are matched to your machine's total VRAM and RAM. What happens to be
+free when you run the installer doesn't count: a browser or the file cache
+gives memory back when the model loads, so the same PC always gets the same
+recommendation.
 
-Qwen3.6-35B-A3B is a mixture-of-experts model: 35B total parameters, 3B active.
-Its expert weights sit in system RAM (`--cpu-moe`) while attention and the KV
-cache stay on the GPU, so it runs in a few GB of VRAM. Measured 2.7 to 6.0 GB
-across 8k to 256k context on a 12 GB card (see
-[`docs/RESULTS.md`](docs/RESULTS.md)). The dense models run entirely on the GPU.
+Qwen3.6-35B-A3B, the default on most PCs, is a mixture-of-experts model (35B
+parameters, 3B active per token). llama.cpp's `--fit` puts as many expert
+layers in VRAM as fit and keeps the rest in system RAM, so it runs on a 12 GB
+card with 32 GB of RAM, and more VRAM makes it faster.
 
-On Windows and Linux the engine is llama.cpp serving GGUF weights. On Apple
-Silicon it's rapid-mlx serving MLX weights. See [`docs/MACOS.md`](docs/MACOS.md).
-
-## Quick start
+## Install (Windows)
 
 ```
 git clone https://github.com/joaovgaraujo/opencode-local-stack.git
 cd opencode-local-stack
-python install.py
+.\setup.cmd
 ```
 
-`install.py` is cross-platform and needs no `pip install` of its own. It:
+`setup.cmd` installs Python 3.12 with winget if it's missing, then asks four
+questions, each with a default you accept with Enter:
 
-1. Detects your hardware: OS, GPU and VRAM (or Apple Silicon unified memory),
-   RAM, free disk.
-2. Opens a picker that shows only the model/quant combinations that fit, best
-   fit first. The GUI installs its own prerequisites (Tkinter on Homebrew
-   Python, and Node.js if you leave the box checked); headless systems fall
-   back to a text wizard.
-3. Downloads a matching llama.cpp release and the GGUF, or on macOS installs
-   pinned rapid-mlx in a project-local venv and lets it fetch MLX weights on
-   first run.
-4. Starts the server, waits for health, and runs the validation suite: short
-   completion, code generation, tool calling, and a 30k-token needle test.
-5. Installs OpenCode, writes `opencode.json`, and runs an agentic smoke test
-   that writes and runs a Python file.
-6. Writes `RESULTS.md` for your machine.
+1. Model: the catalog sorted by fit, or `U` for an uncensored/abliterated
+   model or any GGUF from a Hugging Face link.
+2. Context: 32K to 256K tokens. The default comes from total VRAM: 64K below
+   16 GB, 128K below 24 GB, 256K above.
+3. Thinking: limited (default), off, or unlimited.
+4. Whether PowerShell may run scripts for your user, if Windows blocks them
+   (that block is what makes a plain `opencode` fail with "running scripts is
+   disabled").
 
-```
-python install.py --list-models              # every model id, quant, and size
-python install.py --model qwen3.5-9b --non-interactive
-python install.py --cli                      # text wizard, no GUI
-python install.py --skip-tests               # just start the server
-python install.py --model qwen3.6-35b-a3b --ctx 262144   # full 262K context (MoE: ~5.4 GB VRAM)
-```
+Then it downloads the newest llama.cpp build for your GPU driver, the model,
+Node.js and OpenCode, runs the tests, and installs the `opencode-local`
+command. Re-running it is safe; it reuses what is already downloaded and
+offers to update an older llama.cpp.
 
-`--model-path` serves any GGUF you already have under a catalog entry with the
-same architecture, e.g. a fine-tune of Qwen3.6-35B-A3B:
+Linux and macOS: `python3 install.py` runs the same wizard.
+
+## Use it
+
+Open a terminal in your project folder and run:
 
 ```
-python install.py --model qwen3.6-35b-a3b --model-path models/<file>.gguf --ctx 262144 --non-interactive
+opencode-local
 ```
 
-Node.js is required for OpenCode and is never installed without your say-so.
-The GUI checkbox and the `--install-node` flag opt into a first-party
-installer: winget on Windows, Homebrew on macOS, and on Linux the official
-nodejs.org tarball extracted into a project-local `./node` directory (no sudo,
-nothing touches the system; delete the directory to undo).
+It starts the model server in the background if it isn't running (about a
+minute the first time), then opens OpenCode in that folder. The server keeps
+running after you close OpenCode, so the next start is instant.
 
-`install.py` is idempotent, so re-running it is safe.
+```
+opencode-local --think off                  this session without thinking
+opencode-local --think limited --think-budget 2048
+opencode-local --think on                   unlimited thinking
+opencode-local --ctx 131072                 another context size
+opencode-local --think off --save           make it the default
+opencode-local --status                     what is running
+opencode-local --stop                       stop the model server
+opencode-local run "fix the failing test"   arguments after the options go to OpenCode
+```
+
+`opencode-local` is a `.cmd` file, so PowerShell's script policy never blocks
+it. Settings live in `settings.json` in this folder.
+
+## Thinking
+
+These models reason before answering. Unlimited thinking can take several
+minutes on hard prompts, so the default caps it with llama.cpp's
+`--reasoning-budget`. On six coding tasks (Qwen3.6-35B-A3B Q4_K_M):
+
+| Thinking | Tasks passed | Tokens for all six |
+|---|---|---|
+| limited to 1,024 tokens | 5/6 | 7,704 |
+| limited to 4,096 tokens (default) | 6/6 | 23,137 |
+| unlimited | 6/6 | 27,023 |
+| off | 6/6 | 2,578 |
+
+On a 12 GB card each limited answer took 28 to 69 seconds. These were short,
+self-contained tasks; thinking matters more on bugs that span several files.
+
+## Speed on a 12 GB GPU
+
+Measured with llama.cpp b12359 on an RTX 4090 limited to the ~10 GB a 12 GB
+card has free, Ryzen 9 7950X3D, 64 GB RAM. Qwen3.6-35B-A3B Q4_K_M, 16K-token
+prompt. Your tok/s will differ with RAM speed and CPU.
+
+| Setup | Prefill | Generation |
+|---|---|---|
+| 64K context, all experts in RAM (`--cpu-moe`, the old default) | 3,726 tok/s | 51 tok/s |
+| 64K context, `--fit` (now the default) | 4,437 tok/s | 73 tok/s |
+| 256K context, all experts in RAM | 3,763 tok/s | 51 tok/s |
+| 256K context, `--fit` | 4,209 tok/s | 63 tok/s |
+
+Other defaults, from the same runs: prompt batches of 2048 (`-ub 2048`; about
+1,400 tok/s prefill at the old 512), a q8_0 K and V cache (a mixed q8_0/q4_0
+cache falls back to a slow FlashAttention path in current builds), and
+`--load-mode none`, which reads the weights into RAM instead of memory-mapping
+them. `--fit` keeps a 1.5 GB VRAM margin; it overshot its own plan by about
+0.5 GB in testing, and going past the card's memory spills into slow shared
+memory.
+
+## Models from Hugging Face
+
+In the wizard choose `U`, or pass a link:
+
+```
+.\setup.cmd --hf https://huggingface.co/HauhauCS/Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive
+.\setup.cmd --hf https://huggingface.co/mradermacher/Huihui-Qwen3.6-35B-A3B-abliterated-GGUF --hf-file Huihui-Qwen3.6-35B-A3B-abliterated.Q4_K_M.gguf
+```
+
+A repo link picks the Q4_K_M-class file; a link to one `.gguf` file picks
+that file. The installer reads the file sizes and the GGUF architecture from
+Hugging Face to decide how the model is served. The repo needs single-file
+GGUFs (most `-GGUF` repos by bartowski, unsloth or mradermacher have them).
+The HauhauCS model passed all tests here; other repos are not curated, and the
+tests at the end of the install are what tell you whether one works with
+OpenCode.
+
+## Other options
+
+```
+python install.py --list-models              # every catalog model, quant, and size
+python install.py --model qwen3.5-9b --think off --non-interactive
+python install.py --model qwen3.6-35b-a3b --ctx 262144 --non-interactive
+python install.py --model-path models/<file>.gguf --model qwen3.6-35b-a3b   # a GGUF you already have
+python install.py --update-llamacpp          # replace llama.cpp with the newest build
+python install.py --gui                      # the older Tkinter window
+python install.py --skip-tests
+```
+
+Node.js is required for OpenCode and is installed only with `--install-node`
+(`setup.cmd` passes it): winget on Windows, Homebrew on macOS, and the
+official nodejs.org tarball in `./node` on Linux.
 
 ## Pick a model
 
@@ -80,21 +151,22 @@ for how the estimate is computed. Re-measure on your own machine with
 
 | Model | Arch | Default quant | Est. VRAM | Est. RAM | Notes |
 |---|---|---:|---:|---:|---|
-| **Qwen3.6-35B-A3B** | MoE 35B/3B active | 20.6 GB | 2.7–6.0 GB (measured, `--cpu-moe`, 8k–256k ctx) | 21–22 GB (measured RSS) | See [`docs/RESULTS.md`](docs/RESULTS.md) for measured tok/s |
-| **Gemma 4 26B-A4B** | MoE 26B/4B active | 15.8 GB | 3.8–4.5 GB (est.) | 19.8 GB (est.) | Same `--cpu-moe` trick, lighter RAM footprint |
+| **Qwen3.6-35B-A3B** | MoE 35B/3B active | 20.6 GB | 3.3–6.3 GB minimum (measured, 64K–256K ctx); spare VRAM speeds it up | 21–22 GB (measured RSS) | See [`docs/RESULTS.md`](docs/RESULTS.md) for measured tok/s |
+| **Gemma 4 26B-A4B** | MoE 26B/4B active | 15.8 GB | 3.8–4.5 GB (est.) | 19.8 GB (est.) | Experts in RAM like Qwen3.6, lighter RAM footprint |
 | **Gemma 4 12B (Unified)** | Dense | 6.6 GB | 8.1–9.1 GB (est.) | ~3 GB (est.) | Needs a 12 GB-class GPU; measured not to fit 8 GB even at 8k ctx (see [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md)) |
 | **Qwen3.5-9B** | Dense | 5.3 GB | 6.8–7.8 GB (est.) | ~3 GB (est.) | Largest dense model in the catalog |
 | **Gemma 4 E4B** | Dense | 4.6 GB | 6.1–7.1 GB (est.) | ~3 GB (est.) | |
 | **Qwen3.5-4B** | Dense | 2.6 GB | 4.1–5.1 GB (est.) | ~3 GB (est.) | |
 | **Qwen3.8-27B** | Dense | 16.5 GB | 18.0–19.0 GB (est.) | ~3 GB (est.) | Newest Qwen (2026-08). Needs a 24 GB-class GPU |
-| **Nemotron 3.5 Lightning 30B-A3B** | Hybrid Mamba/MoE 33B/3B active | 25.3 GB | 3.8–4.5 GB (est.) | 29.3 GB (est.) | NVIDIA, `--cpu-moe`; needs 32 GB+ RAM |
-| **LFM2.5-24B-A2B** | MoE 24B/2.45B active | 14.9 GB | 3.8–4.5 GB (est.) | 18.9 GB (est.) | Liquid AI, `--cpu-moe`; text-only, 128K max context |
+| **Nemotron 3.5 Lightning 30B-A3B** | Hybrid Mamba/MoE 33B/3B active | 25.3 GB | 3.8–4.5 GB (est.) | 29.3 GB (est.) | NVIDIA; needs 32 GB+ RAM |
+| **LFM2.5-24B-A2B** | MoE 24B/2.45B active | 14.9 GB | 3.8–4.5 GB (est.) | 18.9 GB (est.) | Liquid AI; text-only, 128K max context |
 | **Ornith-1.0-35B** | MoE 35B/3B active | 22.1 GB | 3.8–4.5 GB (est.) | 26.1 GB (est.) | Coding-agent fine-tune of Qwen3.5-35B-A3B (MIT). Its card: SWE-bench Verified 75.6, Terminal-Bench 2.1 64.2 (Qwen3.6-35B-A3B: 73.4 / 52.5) |
 | **Ornith-1.0-9B** | Dense | 5.7 GB | 7.2–8.2 GB (est.) | ~3 GB (est.) | Agentic-coding fine-tune of Qwen3.5-9B (MIT) |
 | **Nemotron 3.5 Bolt E4B** | Dense | 5.1 GB | 6.6–7.6 GB (est.) | ~3 GB (est.) | NVIDIA post-train of Gemma 4 E4B; llama.cpp only (no MLX build) |
 
-MoE VRAM stays roughly flat across quant sizes because the experts live in
-system RAM. Dense VRAM scales with quant size. On macOS each model also ships
+The MoE VRAM column is the minimum, with every expert layer in system RAM; it
+stays about the same across quant sizes. `--fit` fills any VRAM above it with
+expert layers. Dense VRAM scales with quant size. On macOS each model also ships
 4/6/8-bit MLX quants served from one unified-memory pool instead of a separate
 VRAM/RAM split (see [`docs/MACOS.md`](docs/MACOS.md)).
 
@@ -115,38 +187,30 @@ fit, and CUDA-vs-Vulkan speed for the original six models on one machine:
 
 ## Good to know
 
-- These are reasoning models. They emit `<think>` tokens in a separate
-  `reasoning_content` field before the answer, so give them `max_tokens` of
-  1024 or more or `content` can come back empty. OpenCode handles this
-  natively. To turn thinking off, add
-  `--extra-server-arg=--reasoning --extra-server-arg off`. Answers come back
-  much faster and use far fewer tokens, at some cost on hard problems.
-- Start OpenCode with `.\run.ps1` (or `./run.sh`) in one terminal, then
-  `opencode` in your project folder. If Windows says `opencode` is not
-  recognized, open a new PowerShell window so it picks up the PATH the Node
-  installer changed. The installer also prints the full path to run.
-- MoE models keep their experts in RAM (`--cpu-moe`), so the GPU looks mostly
-  idle while the CPU works; that is expected. They load with
-  `--load-mode none` (no mmap), which measured about 50% faster prompt
-  processing and 14% faster generation than memory-mapping.
-- tok/s never transfers between machines. It depends on your GPU clocks,
-  thermals, and RAM bandwidth. Re-measure with `tests/validate.py` and
-  `tests/vram_logger.ps1`, or an `nvidia-smi -l` loop on Linux.
+- These are reasoning models. Thinking arrives in a separate
+  `reasoning_content` field before the answer, so a client calling the server
+  directly needs `max_tokens` of 1024 or more or `content` can come back
+  empty. OpenCode handles this.
+- With an MoE model the CPU does part of the work, so the GPU is not at 100%
+  while it answers. That is expected.
+- tok/s never transfers between machines. It depends on your GPU, RAM speed
+  and CPU. Re-measure with `tests/validate.py` and `tests/vram_logger.ps1`,
+  or an `nvidia-smi -l` loop on Linux.
 - The first OpenCode run downloads `ripgrep` once and needs internet.
-- Linux with NVIDIA defaults to the official Vulkan prebuilt, because llama.cpp
-  ships no prebuilt Linux CUDA binary. For a CUDA build you compiled yourself,
-  pass `--backend cuda --bin-dir <build/bin>` (see
+- OpenCode reads its settings from `%USERPROFILE%\.config\opencode\opencode.json`
+  (`~/.config/opencode` on Linux). The installer adds its provider to that file
+  and keeps anything else you configured there.
+- Linux with NVIDIA defaults to the official Vulkan prebuilt. For a CUDA build
+  you compiled yourself, pass `--backend cuda --bin-dir <build/bin>` (see
   [`docs/DEPLOY.md`](docs/DEPLOY.md#linux--nvidia-vulkan-vs-building-cuda-from-source)).
-- `install.py` doesn't measure memory itself. Use `tests/benchmark.py` (a
-  stdlib `llama-bench` wrapper that enforces VRAM/RSS caps) or sample
-  `nvidia-smi` and the server RSS while the tests run. Idle allocation is not a
-  trustworthy peak.
 
 ## Repo layout
 
 ```
-install.py                    one-shot installer + validator (Windows, Linux, macOS; GUI + CLI)
-installer/                    hardware detection, model catalog, download, server lifecycle, wizards
+setup.cmd, setup.ps1          Windows one-step setup (installs Python if needed, runs the wizard)
+install.py                    installer + validator (Windows, Linux, macOS)
+start.py                      the opencode-local start command
+installer/                    hardware detection, catalog, Hugging Face links, settings, download, server, wizard
 installer/rapidmlx_setup.py   macOS/Apple Silicon engine
 opencode.json                 OpenCode -> local endpoint config (regenerated per install)
 models/                       drop a GGUF here, or let the installer download it (llama.cpp engine)
@@ -161,8 +225,10 @@ docs/DEPLOY.md                manual usage, GPU backend selection, MoE re-tuning
 ```
 
 Generated on first run and git-ignored: `llama.cpp/` (the runtime),
-`models/*.gguf` (the weights), `run.ps1` / `run.sh` (restart the last server
-without the wizard), and `RESULTS.md` (your machine's pass/fail summary).
+`models/*.gguf` (the weights), `settings.json` (model, context, thinking),
+`run.ps1` / `run.sh` (start only the server, same as
+`opencode-local --server-only`), and `RESULTS.md` (your machine's pass/fail
+summary).
 
 ## Credits
 

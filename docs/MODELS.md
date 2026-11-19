@@ -12,7 +12,7 @@ often enough that a guessed name is a real way to 404 mid-install.
 | Model | Arch | Total / active params | Why it's here |
 |---|---|---|---|
 | **Qwen3.6-35B-A3B** | MoE | 35B / 3B | The model this repo was originally built around, validated end-to-end, see [`RESULTS.md`](RESULTS.md). |
-| **Gemma 4 26B-A4B** | MoE | 26B / 4B | Same `--cpu-moe` trick as Qwen3.6, smaller RAM footprint. |
+| **Gemma 4 26B-A4B** | MoE | 26B / 4B | Experts split between VRAM and RAM like Qwen3.6, smaller RAM footprint. |
 | **Gemma 4 12B (Unified)** | Dense | 12B | Fits fully on an 8GB-class GPU at Q4_K_M. |
 | **Gemma 4 E4B** | Dense | ~4B (elastic) | Smallest Gemma 4 text-capable size. |
 | **Qwen3.5-4B** | Dense | 4B | Runs on almost anything, including CPU-only. |
@@ -43,12 +43,13 @@ end-to-end on a 16 GB Apple M4, with measured footprints and context ceilings).
 The rest of this doc covers the llama.cpp engine's two serving strategies:
 
 - **MoE models** (Qwen3.6-35B-A3B, Gemma 4 26B-A4B, Nemotron 3.5 Lightning,
-  LFM2.5-24B-A2B, Ornith-1.0-35B) run with `--cpu-moe`: the
-  expert tensors live in system RAM, attention + KV cache stay on the GPU.
-  VRAM use stays roughly constant (~3.5–4.5 GB) **regardless of quant size**;
-  only RAM needs to hold the bigger file. This is what makes a 35B model
-  usable on an 8 GB card.
-- **Dense models** (everything else) run fully on GPU (`--n-gpu-layers 999`).
+  LFM2.5-24B-A2B, Ornith-1.0-35B) run with `--fit on`: attention, the KV
+  cache and as many expert layers as fit go in VRAM, the remaining experts in
+  system RAM. The minimum VRAM (every expert in RAM) is about 3.2–6.6 GB by
+  context and barely changes with quant size, which is what makes a 35B model
+  usable on an 8 GB card; extra VRAM makes it faster.
+- **Dense models** (everything else) run fully on GPU (`--fit` places every
+  layer there when the file fits).
   VRAM has to hold the whole quant file plus the KV cache, so a bigger quant
   directly costs more VRAM.
 
@@ -57,31 +58,31 @@ The rest of this doc covers the llama.cpp engine's two serving strategies:
 `catalog.fit_verdict()` classifies each (model, quant, profile) as **fits**,
 **tight**, or **won't fit**, using:
 
-- MoE: `VRAM need ≈ 3.4–4.5 GB` (by context size) · `RAM need ≈ quant size + 4 GB`
-- Dense: `VRAM need ≈ quant size + 1.5–2.5 GB` (by context size) · `RAM need ≈ 3 GB`
+- MoE: `VRAM need ≈ 3.0–6.6 GB` (by context size, 16K–256K) · `RAM need ≈ quant size + 4 GB`
+- Dense: `VRAM need ≈ quant size + 1.5–4.5 GB` (by context size, 16K–64K) · `RAM need ≈ 3 GB`
 
 The fit check runs against the machine's **total** VRAM and RAM, keeping
 **1 GB of VRAM** and **2 GB of RAM** in reserve for the desktop. It
 deliberately ignores how much is free at the moment: free memory depends on
 what else is open, so ranking on it made the recommended model change between
 runs on the same machine. A selection that only meets the raw estimate is
-marked **tight**, not **fits**. With `--profile auto` (the default), the
-installer chooses the largest context that keeps those reserves.
+marked **tight**, not **fits**. The default context also comes from total
+VRAM: for MoE models 64K below 16 GB, 128K below 24 GB and 256K above, stepping
+down when it doesn't fit; dense models default to 32K.
 
-`--ctx N` replaces the profile with one fixed context, for example 262,144
+`--ctx N` (or the wizard) picks another context, for example 262,144
 (Qwen3.6-35B-A3B's native maximum). For MoE models the KV cache is small:
-Qwen3.6-35B-A3B Q4_K_M measured +5.4 GB of VRAM at 262,144 with `--cpu-moe` and
-q8_0 KV. Dense models are only measured up to 32,768, so beyond that the
-estimate reuses the 32K figure and will be low.
+Qwen3.6-35B-A3B Q4_K_M measured +6.3 GB of VRAM at 262,144 and +3.3 GB at
+65,536 with every expert in RAM, q8_0 KV and `-ub 2048` (llama.cpp b12359).
+Dense models are measured only up to 32,768; the 65,536 figure is extrapolated.
 
-Free memory is checked separately, just before `llama-server` starts. If
-other apps are holding the VRAM or RAM the estimate needs, the installer
-prints a warning (the model may spill into shared GPU memory or swap) but
-keeps your pick.
+Free memory is not checked. A browser or the file cache gives RAM back when
+the model loads, and `--fit` sizes the GPU part to whatever VRAM is free when
+the server starts.
 
 For the validated 8 GB-class setup, the recommendation is
 **Qwen3.6-35B-A3B Q4_K_M** (`Qwen3.6-35B-A3B-UD-Q4_K_M.gguf`) with all experts
-in RAM via `--cpu-moe`, q8 KV, and 65,536 context on any GPU with at least
+in RAM (then `--cpu-moe`), q8 KV, and 65,536 context on any GPU with at least
 5.5 GB total VRAM. It measured ~4.0 GB server VRAM and ~22.7 GB RAM. Below that,
 auto mode selects the 32,768 profile instead. This keeps only the intended MoE experts in RAM; dense layers and KV
 remain GPU-resident.

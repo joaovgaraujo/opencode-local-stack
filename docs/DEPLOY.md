@@ -40,7 +40,8 @@ Useful flags: `--profile auto` (default: maximum context with VRAM reserve),
 `--model-path <existing.gguf>`, `--bin-dir <existing llama.cpp folder>`,
 `--backend auto|cuda|vulkan|rocm|cpu`, `--port <N>`, and `--stop-when-done`.
 Repeat `--extra-server-arg` to append one llama-server argument and persist it
-in `run.ps1`/`run.sh`. An argument beginning with `-` must use the equals form
+in `settings.json`; it replaces the matching installer default (for example
+`-ctk`, `--fit`, `-ub` or `--reasoning`). An argument beginning with `-` must use the equals form
 (`--extra-server-arg=--cont-batching`); provide its value separately
 (`--extra-server-arg=--threads --extra-server-arg 16`). These llama.cpp-only
 flags are rejected on the macOS Rapid-MLX path.
@@ -72,28 +73,27 @@ Generated on first run (git-ignored, not in the repo):
 ```
 llama.cpp/          prebuilt llama.cpp release matching your OS + GPU backend (llama.cpp engine only)
 models/*.gguf        the model weights (llama.cpp engine only - rapid-mlx downloads its own)
-run.ps1 / run.sh     restart script for whatever you last installed (macOS gets run.sh only)
+settings.json        model, context and thinking for opencode-local
+run.ps1 / run.sh     start only the server (macOS gets run.sh only)
 RESULTS.md           per-machine pass/fail summary
 ```
 
-## Manual usage (without the installer)
+## Starting it after install
 
-Once `install.py` has run once, `run.ps1` (Windows) / `run.sh` (Linux) restart
-the exact same server without going through the wizard again:
+`opencode-local` (installed on PATH, see the README) starts the server from
+`settings.json` and opens OpenCode in the current folder. To start only the
+server, for another client:
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\run.ps1        # Windows
+opencode-local --server-only          # or .\run.ps1 / ./run.sh, which call the same thing
+opencode-local --stop
 ```
-```bash
-./run.sh                                                   # Linux
-```
-Both take overrides: `run.ps1 -Port 8081 -CtxSize 32768` /
-`PORT=8081 CTX_SIZE=32768 ./run.sh`.
 
-Point OpenCode at it by hand:
+The exact arguments it passes to llama-server are in `.server-state.json`
+after a start. Point OpenCode at the server by hand:
 ```
-npm install -g opencode-ai@1.19.5 @ai-sdk/openai-compatible@3.0.92
-# Windows: copy .\opencode.json "$env:USERPROFILE\.config\opencode\opencode.json"
-# Linux:   cp ./opencode.json ~/.config/opencode/opencode.json
+npm install -g opencode-ai@1.19.6 @ai-sdk/openai-compatible@3.0.93
+# then merge ./opencode.json into %USERPROFILE%\.config\opencode\opencode.json
+# (Linux: ~/.config/opencode/opencode.json); opencode-local does this for you
 opencode      # then /models -> pick the local one
 ```
 
@@ -139,28 +139,28 @@ python install.py --model qwen3.5-4b --non-interactive \
 `--backend cuda` ensures the report and generated launchers reflect the custom
 CUDA runtime rather than Linux's automatic Vulkan choice.
 
-## Re-tune expert offload (MoE models only)
+## Expert placement (MoE models)
 
-The MoE models (Qwen3.6-35B-A3B, Gemma 4 26B-A4B) ship with `--cpu-moe` (ALL
-experts in RAM = lowest VRAM, safe first boot). If your card has headroom
-above what the primary profile uses (~4 GB on an 8 GB card, per
-[`RESULTS.md`](RESULTS.md)), you can move some experts onto the GPU for more
-speed by editing the generated `run.ps1`/`run.sh` to use `--n-cpu-moe N`
-instead of `--cpu-moe` (fewer layers forced to CPU = more experts on GPU = more
-VRAM + faster):
+The server runs with `--fit on --fit-target 1536`: at start-up llama.cpp
+measures the GPU, keeps the dense layers, KV cache and buffers on it, and
+fills the remaining VRAM with expert layers, leaving 1,536 MiB free. The rest
+of the experts stay in system RAM. On a simulated 12 GB card at 64K context
+this gave 73 tok/s against 51 with every expert in RAM (`--cpu-moe`); see the
+README for the table.
 
-1. Start from safe (`--cpu-moe`, the default).
-2. Binary-search `--n-cpu-moe N` **upward** from a low N (more experts on GPU),
-   watching `nvidia-smi --query-gpu=memory.used --format=csv -l 2` while
-   generating at full context.
-3. Stop when peak card usage nears your card's ceiling (leave ~1–1.5 GB for
-   the desktop compositor). Keep the last stable value.
-4. If it OOMs or spills to shared memory: back off (raise N toward
-   `--cpu-moe`), then reduce `--ctx-size`, then quantize the KV cache further
-   (`-ctk q4_0 -ctv q4_0`), in that order.
-5. On Windows with NVIDIA: NVIDIA Control Panel → Manage 3D settings → CUDA -
-   Sysmem Fallback Policy = **Prefer No Sysmem Fallback**, so it OOMs loudly
-   instead of silently running at a fraction of the speed off shared memory.
+`--fit` measures VRAM when the server starts, so a game or another model
+holding VRAM at that moment means fewer expert layers on the GPU (slower, but
+it still loads). To change the margin, edit `fit_margin_mib` in
+`settings.json`. In testing `--fit` used about 0.5 GB more than it planned, so
+keep at least 1,024.
+
+To place experts yourself, pass your own flags; they replace `--fit`:
+```
+python install.py ... --extra-server-arg=--n-gpu-layers --extra-server-arg 999 --extra-server-arg=--n-cpu-moe --extra-server-arg 28
+```
+On Windows with NVIDIA, NVIDIA Control Panel -> Manage 3D settings -> CUDA -
+Sysmem Fallback Policy = Prefer No Sysmem Fallback makes an over-full card fail
+with an error instead of running slowly from shared memory.
 
 ## Notes
 

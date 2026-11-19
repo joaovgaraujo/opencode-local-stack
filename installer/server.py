@@ -25,63 +25,6 @@ def find_server_binary(bin_dir):
     return None
 
 
-KV_K_FLAGS = ("-ctk", "--cache-type-k")
-KV_V_FLAGS = ("-ctv", "--cache-type-v")
-LOAD_FLAGS = ("-lm", "--load-mode", "--mmap", "--no-mmap")
-
-
-def user_sets(extra_args, flags):
-    """True when the user's extra args already pass one of these flags, so the
-    installer's own default for it is left out (no duplicate-flag warnings)."""
-    return any(a in flags or a.split("=", 1)[0] in flags for a in (extra_args or []))
-
-
-def defaults_for(arch, backend, extra_args):
-    """Which installer defaults apply, given the user's extra args.
-
-    With the experts in RAM (--cpu-moe), reading the weights into memory up
-    front beats memory-mapping them: on Qwen3.6-35B-A3B at 262K (RTX 4090,
-    official llama.cpp) --load-mode none took prefill from 944 to 1453 tok/s
-    and decode from 45 to 51 tok/s. It uses the RAM the fit check already
-    reserves for the model; loading takes a little longer."""
-    moe = backend != "cpu" and arch == "moe"
-    return {
-        "moe": moe,
-        "kv_k": not user_sets(extra_args, KV_K_FLAGS),
-        "kv_v": not user_sets(extra_args, KV_V_FLAGS),
-        "load_none": moe and not user_sets(extra_args, LOAD_FLAGS),
-    }
-
-
-def build_server_args(model, quant, model_path, port, profile, kv_type="q8_0", backend=None,
-                      extra_args=None):
-    from . import catalog
-    if backend not in {"cuda", "vulkan", "rocm", "cpu"}:
-        raise ValueError(f"backend must be resolved before building server arguments: {backend!r}")
-    ctx = catalog.ctx_sizes(model)[profile]
-    args = [
-        "-m", model_path,
-        "--alias", model["id"],
-        "--ctx-size", str(ctx),
-        "--flash-attn", "on",
-    ]
-    d = defaults_for(model["arch"], backend, extra_args)
-    if d["kv_k"]:
-        args += ["-ctk", kv_type]
-    if d["kv_v"]:
-        args += ["-ctv", kv_type]
-    args += ["--jinja", "--host", "127.0.0.1", "--port", str(port)]
-    if backend == "cpu":
-        args += ["--n-gpu-layers", "0"]
-    else:
-        args += ["--n-gpu-layers", "999"]
-        if d["moe"]:
-            args += ["--cpu-moe"]
-    if d["load_none"]:
-        args += ["--load-mode", "none"]
-    return args + list(extra_args or [])
-
-
 PID_FILE_NAME = ".llama-server.pid"
 
 
@@ -161,9 +104,14 @@ def kill_existing_server(root):
 def start_server(server_bin, args, log_out_path, log_err_path, root=None):
     out_f = open(log_out_path, "wb")
     err_f = open(log_err_path, "wb")
-    popen_kwargs = {}
+    popen_kwargs = {"stdin": subprocess.DEVNULL}
     if platform.system() == "Windows":
-        popen_kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+        # Own hidden console: survives the terminal that started it closing,
+        # and Ctrl+C in that terminal (e.g. quitting OpenCode) doesn't reach it.
+        popen_kwargs["creationflags"] = (subprocess.CREATE_NO_WINDOW |
+                                         subprocess.CREATE_NEW_PROCESS_GROUP)
+    else:
+        popen_kwargs["start_new_session"] = True
     try:
         proc = subprocess.Popen([server_bin] + args, stdout=out_f, stderr=err_f,
                                 **popen_kwargs)
@@ -253,112 +201,21 @@ def _sh_quoted(s):
     return shlex.quote(s)
 
 
-def write_run_scripts(root, bin_dir, model_path, model_id, arch, port, ctx, kv_type, backend,
-                      extra_args=None):
-    """Write run.ps1 (Windows) and run.sh (Linux) so the server can be
-    restarted later (with overridable -Port/-CtxSize/-KvType) without going
-    through the installer/GUI again. Both are generated from the same
-    resolved args so they can never drift apart.
-
-    rel_bin/rel_model come from the actual extracted directory layout of a
-    downloaded archive (see find_server_binary), not a fixed constant - so
-    they're spliced in as properly-quoted literals (_ps1_single_quoted /
-    _sh_quoted), never bare inside a double-quoted string. A double-quoted
-    PowerShell or bash string still expands `$(...)`/backticks, so a path
-    segment containing one would otherwise execute when the script runs.
-    """
-    n_gpu_layers = "0" if backend == "cpu" else "999"
-    extra_args = list(extra_args or [])
-    d = defaults_for(arch, backend, extra_args)
-    moe_flag = d["moe"]
-    kv_on = [f for f, on in (("-ctk", d["kv_k"]), ("-ctv", d["kv_v"])) if on]
-    ps_kv = "".join(f'    "{f}", $KvType,\n' for f in kv_on)
-    ps_load = '    "--load-mode", "none",\n' if d["load_none"] else ""
-    sh_kv = " ".join(f'{f} "$KV_TYPE"' for f in kv_on)
-    sh_kv_line = f"    {sh_kv} \\\n" if sh_kv else ""
-    sh_load = "    --load-mode none \\\n" if d["load_none"] else ""
-    extra_ps_entries = "".join(f",\n    {_ps1_single_quoted(arg)}" for arg in extra_args)
-    extra_sh_words = " ".join(_sh_quoted(arg) for arg in extra_args)
-
-    # Forward slashes work in both PowerShell (Windows and pwsh-on-Linux) and
-    # bash - avoids writing a run.sh full of backslashes when install.py runs
-    # on Windows (os.path.relpath uses the host's native separator).
-    rel_bin = os.path.relpath(bin_dir, root).replace(os.sep, "/")
-    rel_model = os.path.relpath(model_path, root).replace(os.sep, "/")
-
-    ps1 = f"""# run.ps1 - restart the llama-server configured by install.py.
-# Regenerated each install; re-run install.py to change model/quant/profile.
-param(
-    [string]$BinDir    = (Join-Path $PSScriptRoot {_ps1_single_quoted(rel_bin)}),
-    [string]$ModelPath = (Join-Path $PSScriptRoot {_ps1_single_quoted(rel_model)}),
-    [int]$Port         = {port},
-    [int]$CtxSize      = {ctx},
-    [string]$KvType    = "{kv_type}"
-)
-$ErrorActionPreference = "Stop"
-if (-not (Test-Path $ModelPath)) {{ throw "Model not found: $ModelPath" }}
-$Server = Join-Path $BinDir "llama-server.exe"
-if (-not (Test-Path $Server)) {{ throw "llama-server.exe not found in: $BinDir" }}
-
-$serverArgs = @(
-    "-m", $ModelPath,
-    "--alias", "{model_id}",
-    "--n-gpu-layers", "{n_gpu_layers}",
-{'    "--cpu-moe",' if moe_flag else ''}
-    "--ctx-size", "$CtxSize",
-    "--flash-attn", "on",
-{ps_kv}{ps_load}    "--jinja",
-    "--host", "127.0.0.1",
-    "--port", "$Port"{extra_ps_entries}
-)
-Write-Host "==> llama-server $($serverArgs -join ' ')"
-& $Server @serverArgs
-"""
+def write_run_scripts(root, python_exe):
+    """run.ps1 / run.sh start the server alone (no OpenCode). They call the
+    same start command as `opencode-local`, so they always use settings.json
+    and can't drift from it. The paths are spliced in as inert quoted literals
+    (_ps1_single_quoted / _sh_quoted)."""
+    start_py = os.path.join(root, "start.py")
+    ps1 = ("# run.ps1 - start the llama-server set up by install.py (no OpenCode).\n"
+           "# Same as: opencode-local --server-only. Settings live in settings.json.\n"
+           f"& {_ps1_single_quoted(python_exe)} {_ps1_single_quoted(start_py)} "
+           "--server-only @args\n")
     with open(os.path.join(root, "run.ps1"), "w", encoding="utf-8", newline="\n") as f:
         f.write(ps1)
-
-    moe_line = '    "--cpu-moe" \\\n' if moe_flag else ""
-    # Deliberately spelled out as if/else rather than a compact "${1:-...}"
-    # default: rel_bin/rel_model reflect the archive's own directory layout
-    # (see the write_run_scripts docstring), so they're spliced in through
-    # _sh_quoted() as an unambiguous single-quoted literal - simpler to
-    # verify correct than nesting quote-switches inside a parameter expansion.
-    sh = f"""#!/usr/bin/env bash
-# run.sh - restart the llama-server configured by install.py.
-# Regenerated each install; re-run install.py to change model/quant/profile.
-set -euo pipefail
-SCRIPT_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
-if [ -n "${{1:-}}" ]; then
-    BIN_DIR="$1"
-else
-    BIN_DIR="$SCRIPT_DIR/"{_sh_quoted(rel_bin)}
-fi
-if [ -n "${{2:-}}" ]; then
-    MODEL_PATH="$2"
-else
-    MODEL_PATH="$SCRIPT_DIR/"{_sh_quoted(rel_model)}
-fi
-PORT="${{PORT:-{port}}}"
-CTX_SIZE="${{CTX_SIZE:-{ctx}}}"
-KV_TYPE="${{KV_TYPE:-{kv_type}}}"
-EXTRA_ARGS=({extra_sh_words})
-
-[ -f "$MODEL_PATH" ] || {{ echo "Model not found: $MODEL_PATH" >&2; exit 1; }}
-SERVER="$BIN_DIR/llama-server"
-[ -x "$SERVER" ] || SERVER="$(find "$BIN_DIR" -name llama-server -type f | head -n1)"
-[ -x "$SERVER" ] || {{ echo "llama-server not found under: $BIN_DIR" >&2; exit 1; }}
-
-echo "==> $SERVER -m $MODEL_PATH --alias {model_id} --n-gpu-layers {n_gpu_layers} ..."
-exec "$SERVER" \\
-    -m "$MODEL_PATH" \\
-    --alias "{model_id}" \\
-    --n-gpu-layers {n_gpu_layers} \\
-{moe_line}    --ctx-size "$CTX_SIZE" \\
-    --flash-attn on \\
-{sh_kv_line}{sh_load}    --jinja \\
-    --host 127.0.0.1 --port "$PORT" \\
-    "${{EXTRA_ARGS[@]}}"
-"""
+    sh = ("#!/usr/bin/env bash\n"
+          "# run.sh - start the llama-server set up by install.py (no OpenCode).\n"
+          f'exec {_sh_quoted(python_exe)} {_sh_quoted(start_py)} --server-only "$@"\n')
     sh_path = os.path.join(root, "run.sh")
     with open(sh_path, "w", encoding="utf-8", newline="\n") as f:
         f.write(sh)

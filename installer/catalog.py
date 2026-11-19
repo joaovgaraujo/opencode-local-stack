@@ -30,11 +30,14 @@ HF_RESOLVE = "https://huggingface.co/{repo}/resolve/main/{file}"
 # Fit-heuristic constants. These are conservative estimates, not measurements -
 # tests/validate.py + tests/vram_logger.ps1|sh give you real numbers for your
 # machine after install. See docs/MODELS.md "How the fit estimate works".
-MOE_VRAM_BASE_GB = {262144: 5.8, 131072: 5.0, 65536: 4.5, 32768: 3.8, 16384: 3.4}
-# 262144: Qwen3.6-35B-A3B Q4_K_M measured +5.4 GB with --cpu-moe and q8_0 KV on CUDA
-# (2026-11-07); 131072 is interpolated. Dense models are only measured to 32768.
+MOE_VRAM_BASE_GB = {262144: 6.6, 131072: 4.6, 65536: 3.6, 32768: 3.2, 16384: 3.0}
+# Minimum VRAM with every expert in RAM. Measured on Qwen3.6-35B-A3B Q4_K_M,
+# q8_0 K/V, -ub 2048, llama.cpp b12359 (2026-11-19): +3.3 GB at 65536, +6.3 GB
+# at 262144; the rest is interpolated, plus ~0.3 GB margin. Any VRAM above
+# this is used by --fit for expert layers, which is what makes bigger GPUs
+# faster. Dense models are only measured to 32768.
 MOE_RAM_OVERHEAD_GB = 4.0          # on top of the quant file size
-DENSE_VRAM_OVERHEAD_GB = {32768: 2.5, 16384: 1.5}   # on top of the quant file size
+DENSE_VRAM_OVERHEAD_GB = {65536: 4.5, 32768: 2.5, 16384: 1.5}  # on top of the file size; 65536 extrapolated
 DENSE_RAM_OVERHEAD_GB = 3.0         # OS + mmap bookkeeping only; weights live on GPU
 VRAM_RESERVE_GB = 1.0                # keep display/desktop and transient buffers off the edge
 RAM_RESERVE_GB = 2.0                 # avoid paging model data under ordinary desktop load
@@ -64,6 +67,9 @@ MLX_WEIGHT_FACTOR = 1.05        # resident weights run slightly above file size
 MLX_BASE_OVERHEAD_GB = 1.0      # activations + a minimum prefill buffer
 MLX_KV_FACTOR = {"gemma": 1.07, "qwen": 0.0}  # KV+prefill per GB of weights
 MLX_KV_FACTOR_DEFAULT = 0.4     # unknown family: assume moderate KV weight
+
+# Context sizes the wizard offers, per architecture.
+CTX_CHOICES = {"moe": [32768, 65536, 131072, 262144], "dense": [16384, 32768, 65536]}
 
 CTX_PROFILES = {
     "moe":   {"primary": 65536, "conservative": 32768},
@@ -516,6 +522,33 @@ def recommended_profile(model, quant, hw):
         if hw_fit_verdict(model, quant, profile, hw) == "fits":
             return profile
     return "conservative"
+
+
+def with_ctx(model, ctx):
+    """Copy of model fixed to one context size (see ctx_sizes)."""
+    return dict(model, ctx_override=int(ctx))
+
+
+def default_ctx(model, hw):
+    """Context the wizard pre-selects, from TOTAL VRAM (not free).
+
+    MoE: 64K below 16 GB, 128K below 24 GB, 256K above. Smaller contexts leave
+    more VRAM for expert layers (simulated 12 GB card: 73 tok/s at 64K vs 63 at
+    256K), and OpenCode compacts long sessions on its own. Dense: 32K. Falls
+    back to the largest choice that still fits."""
+    vram = hw.vram_total_gb or 0
+    choices = CTX_CHOICES[model["arch"]]
+    if model["arch"] == "moe":
+        pref = 262144 if vram >= 23 else 131072 if vram >= 15 else 65536
+    else:
+        pref = 32768
+    quant = default_quant(model) if model.get("quants") else None
+    for ctx in sorted(choices, reverse=True):
+        if ctx > pref:
+            continue
+        if quant is None or hw_fit_verdict(with_ctx(model, ctx), quant, "primary", hw) == "fits":
+            return ctx
+    return choices[0]
 
 
 def all_variants():

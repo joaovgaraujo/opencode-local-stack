@@ -141,8 +141,8 @@ def try_install_node(log):
     return None
 
 
-OPENCODE_VERSION = "1.19.5"
-OPENAI_COMPAT_VERSION = "3.0.92"
+OPENCODE_VERSION = "1.19.6"
+OPENAI_COMPAT_VERSION = "3.0.93"
 
 
 def npm_install_opencode(log):
@@ -212,15 +212,128 @@ def opencode_config_dir():
 
 
 def install_config(opencode_json_path):
+    """Merge this stack's provider + default model into the user's global
+    OpenCode config, keeping anything else they configured (other providers,
+    agents, MCP servers...). An unreadable existing file is kept as .bak."""
+    import json
     cfg_dir = opencode_config_dir()
     os.makedirs(cfg_dir, exist_ok=True)
     dest = os.path.join(cfg_dir, "opencode.json")
-    shutil.copyfile(opencode_json_path, dest)
+    with open(opencode_json_path, encoding="utf-8") as f:
+        ours = json.load(f)
+    merged = {}
+    if os.path.exists(dest):
+        try:
+            with open(dest, encoding="utf-8") as f:
+                merged = json.load(f)
+            if not isinstance(merged, dict):
+                raise ValueError("not an object")
+        except ValueError:
+            shutil.copyfile(dest, dest + ".bak")
+            merged = {}
+    merged["$schema"] = ours["$schema"]
+    merged["model"] = ours["model"]
+    providers = merged.get("provider") if isinstance(merged.get("provider"), dict) else {}
+    providers.update(ours["provider"])
+    merged["provider"] = providers
+    with open(dest, "w", encoding="utf-8") as f:
+        json.dump(merged, f, indent=2)
+        f.write("\n")
     return dest
 
 
-def _run_opencode(args, cwd, timeout_s):
+def find_opencode():
+    """Path of the OpenCode launcher to run, or None.
+
+    On Windows npm installs three launchers: opencode.ps1, opencode.cmd and a
+    shell script. PowerShell prefers the .ps1, which the default execution
+    policy blocks ("running scripts is disabled"), so OpenCode looks missing
+    in every folder. The .cmd launcher is never blocked; use it."""
+    if platform.system() == "Windows":
+        refresh_windows_path()
+        exe = shutil.which("opencode.cmd")
+        if not exe:
+            bin_dir = npm_global_bin()
+            cand = os.path.join(bin_dir, "opencode.cmd") if bin_dir else None
+            exe = cand if cand and os.path.exists(cand) else None
+        return exe
     exe = shutil.which("opencode")
+    if not exe:
+        bin_dir = npm_global_bin()
+        cand = os.path.join(bin_dir, "opencode") if bin_dir else None
+        exe = cand if cand and os.path.exists(cand) else None
+    return exe
+
+
+def powershell_scripts_blocked():
+    """True when PowerShell's effective execution policy blocks unsigned local
+    scripts (Restricted / AllSigned / Undefined), which is what makes a plain
+    `opencode` fail in PowerShell on Windows."""
+    if platform.system() != "Windows":
+        return False
+    try:
+        r = subprocess.run(["powershell", "-NoProfile", "-Command", "Get-ExecutionPolicy"],
+                           capture_output=True, text=True, timeout=20)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return r.stdout.strip() in ("Restricted", "AllSigned", "Undefined")
+
+
+def allow_powershell_scripts(log):
+    """Set the CurrentUser execution policy to RemoteSigned: local scripts
+    (npm's opencode.ps1) run, downloaded unsigned scripts still don't. No
+    admin rights needed; affects only this Windows user."""
+    subprocess.run(["powershell", "-NoProfile", "-Command",
+                    "Set-ExecutionPolicy -Scope CurrentUser RemoteSigned -Force"],
+                   capture_output=True, text=True)
+    ok = not powershell_scripts_blocked()
+    log("  PowerShell scripts allowed for this user (RemoteSigned)." if ok else
+        "  Could not change the PowerShell policy; `opencode-local` works anyway.")
+    return ok
+
+
+def install_launcher(root, python_exe, log):
+    """Install the `opencode-local` command so it works from any folder.
+
+    Windows: opencode-local.cmd in npm's global folder (on PATH: it is where
+    opencode.cmd lives), else the per-user WindowsApps folder, which Windows
+    puts on PATH by default. A .cmd is never blocked by PowerShell's execution
+    policy. Linux: ~/.local/bin/opencode-local. A copy also goes in the repo."""
+    start_py = os.path.join(root, "start.py")
+    windows = platform.system() == "Windows"
+    if windows:
+        body = f'@echo off\r\n"{python_exe}" "{start_py}" %*\r\n'
+        targets = [npm_global_bin(),
+                   os.path.join(os.environ.get("LOCALAPPDATA", ""), "Microsoft", "WindowsApps")]
+        name = "opencode-local.cmd"
+    else:
+        body = f'#!/usr/bin/env sh\nexec "{python_exe}" "{start_py}" "$@"\n'
+        targets = [os.path.join(os.path.expanduser("~"), ".local", "bin")]
+        name = "opencode-local"
+    with open(os.path.join(root, name), "w", encoding="utf-8", newline="") as f:
+        f.write(body)
+    if not windows:
+        os.chmod(os.path.join(root, name), 0o755)
+    for folder in targets:
+        if not folder or (windows and not os.path.isdir(folder)):
+            continue
+        try:
+            os.makedirs(folder, exist_ok=True)
+            dest = os.path.join(folder, name)
+            with open(dest, "w", encoding="utf-8", newline="") as f:
+                f.write(body)
+            if not windows:
+                os.chmod(dest, 0o755)
+            log(f"  start command installed: {dest}")
+            return dest
+        except OSError:
+            continue
+    log(f"  could not put opencode-local on PATH; run it as {os.path.join(root, name)}")
+    return None
+
+
+def _run_opencode(args, cwd, timeout_s):
+    exe = find_opencode()
     if not exe:
         return None
     try:

@@ -2,47 +2,55 @@
 """install.py - one-shot cross-platform installer + validator for the local
 LLM + OpenCode coding-agent stack (Windows, Linux, and macOS/Apple Silicon).
 
-    python install.py                 # GUI wizard (falls back to text if no Tkinter)
-    python install.py --cli           # force the text wizard
-    python install.py --model qwen3.6-35b-a3b --quant Qwen3.6-35B-A3B-UD-Q4_K_M.gguf \\
-                       --profile primary --non-interactive
-    python install.py --list-models   # print the catalog (both engines) and exit
+    setup.cmd                         # Windows: double-click, or run in PowerShell
+    python install.py                 # text wizard: model, context, thinking
+    python install.py --hf https://huggingface.co/OWNER/NAME     # any GGUF repo
+    python install.py --model qwen3.6-35b-a3b --ctx 65536 --think limited \\
+                       --non-interactive
+    python install.py --list-models   # print the catalog and exit
+    python install.py --gui           # the older Tkinter window
+
+Afterwards, in any project folder:  opencode-local   (see start.py)
 
 Two engines, picked automatically by hwdetect.pick_engine - see
 docs/MODELS.md and docs/MACOS.md:
   llamacpp - Windows/Linux: llama-server serving GGUF weights.
-  rapidmlx - macOS/Apple Silicon: rapid-mlx serving MLX weights, validated
-             on Apple Silicon.
+  rapidmlx - macOS/Apple Silicon: rapid-mlx serving MLX weights.
 
 What it does (idempotent - safe to re-run):
-  1. Detects OS, GPU/unified-memory, VRAM, RAM, free disk.
-  2. Lets you pick a model + quantization (GUI/CLI, filtered by what plausibly
-     fits) or takes it from --model/--quant/--profile.
-  3. llamacpp: downloads (or reuses) a matching prebuilt llama.cpp release and
-     the GGUF. rapidmlx: installs the rapid-mlx CLI (pip); it downloads its
-     own weights on first `serve`.
-  4. Starts the server, waits for it to become healthy, checks the /v1/models
-     alias.
+  1. Detects OS, GPU, total VRAM and RAM, free disk. Models are matched to
+     TOTAL memory: browsers and file cache give memory back when the model
+     loads, so what happens to be free right now doesn't change the pick.
+  2. Asks for a model (catalog or Hugging Face link), context and thinking
+     mode, or takes them from flags.
+  3. Downloads (or reuses / updates) the newest llama.cpp build for this GPU
+     and driver, and the GGUF.
+  4. Writes settings.json and starts the server: llama.cpp --fit puts as many
+     MoE expert layers in VRAM as fit, the rest in RAM.
   5. Runs tests/validate.py (unless --skip-tests).
-  6. Installs OpenCode, writes opencode.json, runs an agentic smoke test.
+  6. Installs OpenCode, points it at the server, installs the
+     `opencode-local` start command, runs an agentic smoke test.
   7. Writes RESULTS.md.
 
 Node (required for OpenCode) is never installed silently. Pass --install-node
-(the GUI checks this by default) to opt into a first-party installer: winget on
-Windows, Homebrew on macOS, the official nodejs.org tarball into a project-local
-./node on Linux (no sudo) - see installer/opencode_setup.py.
+(setup.cmd does) to opt into a first-party installer: winget on Windows,
+Homebrew on macOS, the official nodejs.org tarball into ./node on Linux.
 """
 import argparse
 import json
 import os
 import platform
+import re
+import shutil
+import subprocess
 import sys
-import time
+import urllib.error
 import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from installer import catalog, download, hwdetect, opencode_setup, rapidmlx_setup, server
+from installer import (catalog, download, hf, hwdetect, opencode_setup, rapidmlx_setup,
+                       server, settings)
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 
@@ -90,18 +98,51 @@ def verify_download_size(quant, path, log, fatal=True):
         return None
 
 
-def ensure_llamacpp(bin_dir, backend, log, progress):
+def installed_build(bin_dir):
+    """llama.cpp build number of the llama-server in bin_dir, or None."""
+    exe = server.find_server_binary(bin_dir) if os.path.isdir(bin_dir) else None
+    if not exe:
+        return None
+    try:
+        r = subprocess.run([exe, "--version"], capture_output=True, text=True, timeout=30,
+                           encoding="utf-8", errors="replace")
+    except (OSError, subprocess.SubprocessError):
+        return None
+    m = re.search(r"build[: ]+(\d+)", (r.stdout or "") + (r.stderr or ""))
+    return int(m.group(1)) if m else None
+
+
+def latest_build(backend, cuda_driver=None):
+    """(build_number, assets) of the newest llama.cpp release, or (None, None)."""
+    try:
+        assets = download.resolve_llamacpp_assets(backend, platform.system(), cuda_driver)
+    except (OSError, RuntimeError, urllib.error.URLError, ValueError):
+        return None, None
+    m = re.fullmatch(r"b(\d+)", assets.get("tag") or "")
+    return (int(m.group(1)) if m else None), assets
+
+
+def ensure_llamacpp(bin_dir, backend, log, progress, cuda_driver=None, update=False):
     existing = server.find_server_binary(bin_dir) if os.path.isdir(bin_dir) else None
-    if existing:
-        log(f"Using existing llama.cpp binary: {existing}")
+    if existing and not update:
+        build = installed_build(bin_dir)
+        log(f"Using existing llama.cpp{f' build {build}' if build else ''}: {existing}")
         return os.path.dirname(existing)
 
-    log(f"Downloading prebuilt llama.cpp release (backend={backend}, os={platform.system()})")
+    log(f"Downloading the newest llama.cpp (backend={backend}, os={platform.system()})")
     try:
-        assets = download.resolve_llamacpp_assets(backend, platform.system())
+        assets = download.resolve_llamacpp_assets(backend, platform.system(), cuda_driver)
     except (OSError, RuntimeError, urllib.error.URLError) as e:
+        if existing:
+            log(f"  could not check for a newer llama.cpp ({e}); keeping the installed one")
+            return os.path.dirname(existing)
         die(f"Could not resolve a prebuilt llama.cpp runtime: {e}")
-    os.makedirs(bin_dir, exist_ok=True)
+    # Extract into a fresh folder, then swap, so a failed download never
+    # leaves a half-replaced install behind.
+    target = bin_dir + ".new" if existing else bin_dir
+    if os.path.isdir(target):
+        shutil.rmtree(target, ignore_errors=True)
+    os.makedirs(target, exist_ok=True)
 
     def dl(asset, label):
         dest = os.path.join(ROOT, asset["name"])
@@ -113,17 +154,23 @@ def ensure_llamacpp(bin_dir, backend, log, progress):
         return dest
 
     bin_archive = dl(assets["binary"], "llama.cpp binary")
-    download.extract_archive(bin_archive, bin_dir)
+    download.extract_archive(bin_archive, target)
     os.remove(bin_archive)
     if assets["cudart"]:
         cudart_archive = dl(assets["cudart"], "CUDA runtime")
-        download.extract_archive(cudart_archive, bin_dir)
+        download.extract_archive(cudart_archive, target)
         os.remove(cudart_archive)
-
+    if not server.find_server_binary(target):
+        die(f"llama-server not found after extracting the {assets['tag']} release")
+    if existing:
+        old = bin_dir + ".old"
+        shutil.rmtree(old, ignore_errors=True)
+        os.replace(bin_dir, old)
+        os.replace(target, bin_dir)
+        shutil.rmtree(old, ignore_errors=True)
     found = server.find_server_binary(bin_dir)
-    if not found:
-        die(f"llama-server not found after extracting the {assets['tag']} release into {bin_dir}")
-    log(f"Installed llama.cpp {assets['tag']} -> {os.path.dirname(found)}")
+    log(f"Installed llama.cpp {assets['tag']} ({assets['binary']['name']}) -> "
+        f"{os.path.dirname(found)}")
     return os.path.dirname(found)
 
 
@@ -163,13 +210,23 @@ def ensure_model(model, quant, model_path, log, progress):
     return model_path
 
 
+def _rel(path):
+    """Path relative to the repo when inside it, so the folder can be moved."""
+    path = os.path.abspath(path)
+    try:
+        rel = os.path.relpath(path, ROOT)
+    except ValueError:  # other drive on Windows
+        return path
+    return path if rel.startswith("..") else rel
+
+
 def run_pipeline_llamacpp(model, quant, profile, hw, skip_tests=False, port=8080, bin_dir=None,
                           model_path=None, install_node=False, stop_when_done=False,
-                          backend=None, extra_server_args=None,
+                          backend=None, extra_server_args=None, thinking=None,
+                          think_budget=None, update_llamacpp=False, allow_ps_scripts=None,
                           log=print, progress=lambda *a: None):
-    """The GGUF/llama.cpp install pipeline (Windows/Linux), shared by the CLI
-    and GUI front-ends. See run_pipeline_mlx for the macOS/Apple Silicon
-    counterpart."""
+    """The GGUF/llama.cpp install pipeline (Windows/Linux), shared by the
+    wizard, flags and GUI front-ends. See run_pipeline_mlx for macOS."""
     report = {}
     extra_server_args = list(extra_server_args or [])
 
@@ -183,39 +240,59 @@ def run_pipeline_llamacpp(model, quant, profile, hw, skip_tests=False, port=8080
     report["Backend"] = backend
     report["Hardware"] = "; ".join(hw.summary_lines())
 
-    log("=== 1/6 llama.cpp binary ===")
-    resolved_bin_dir = ensure_llamacpp(bin_dir, backend, log, progress)
+    log("=== 1/6 llama.cpp ===")
+    server.kill_existing_server(ROOT)
+    resolved_bin_dir = ensure_llamacpp(bin_dir, backend, log, progress,
+                                       cuda_driver=getattr(hw, "cuda_driver", None),
+                                       update=update_llamacpp)
 
     log("=== 2/6 Model weights ===")
     resolved_model_path = ensure_model(model, quant, model_path, log, progress)
 
     log("=== 3/6 Starting llama-server ===")
-    server.kill_existing_server(ROOT)
-    _llamacpp_memory_preflight(model, quant, profile, log)
     ctx = catalog.ctx_sizes(model)[profile]
-    args = server.build_server_args(model, quant, resolved_model_path, port, profile,
-                                    backend=backend, extra_args=extra_server_args)
+    _memory_plan(model, quant, profile, hw, log)
+    old = settings.load(ROOT) or {}
+    s = dict(settings.DEFAULTS)
+    s.update({
+        "engine": "llamacpp",
+        "model_id": model["id"],
+        "display_name": model["display_name"],
+        "arch": model["arch"],
+        "reasoning": bool(model.get("reasoning", True)),
+        "model_path": _rel(resolved_model_path),
+        "bin_dir": _rel(resolved_bin_dir),
+        "backend": backend,
+        "port": port,
+        "ctx": ctx,
+        "thinking": thinking or old.get("thinking") or settings.DEFAULTS["thinking"],
+        "think_budget": think_budget or old.get("think_budget") or
+        settings.DEFAULTS["think_budget"],
+        "extra_args": extra_server_args,
+    })
+    settings.save(ROOT, s)
+    args = settings.server_args(s, ROOT)
     log(f"  llama-server {' '.join(args)}")
     proc = server.start_server(os.path.join(resolved_bin_dir, server.server_exe_name()), args,
                                os.path.join(ROOT, "server.log"), os.path.join(ROOT, "server.err"),
                                root=ROOT)
-    log("  waiting for /health ...")
-    if not server.wait_for_health(port, process=proc):
-        die("Server did not become healthy (or exited during startup) - see server.log / server.err")
+    with open(os.path.join(ROOT, ".server-state.json"), "w", encoding="utf-8") as f:
+        json.dump({"pid": proc.pid, "args": args}, f)
+    log("  waiting for /health (loading the model takes about a minute) ...")
+    if not server.wait_for_health(port, timeout_s=900, process=proc):
+        die("Server did not become healthy (or exited during startup) - see server.err")
     alias = server.get_served_alias(port)
     if alias != model["id"]:
         die(f"/v1/models reports '{alias}', expected '{model['id']}'")
     log(f"  healthy, alias={alias}, pid={proc.pid}")
     report["Model"] = f"{model['display_name']} / {quant['label']} ({resolved_model_path})"
-    report["Server"] = f"port {port}, ctx {ctx}, profile {profile}"
+    report["Server"] = settings.describe(s)
 
-    log("=== 4/6 Writing config + run scripts ===")
+    log("=== 4/6 Writing config + start command ===")
     opencode_json = os.path.join(ROOT, "opencode.json")
     server.write_opencode_json(opencode_json, model, port, ctx)
-    server.write_run_scripts(ROOT, resolved_bin_dir, resolved_model_path, model["id"],
-                              model["arch"], port, ctx, "q8_0", backend,
-                              extra_args=extra_server_args)
-    log("  opencode.json, run.ps1, run.sh written")
+    server.write_run_scripts(ROOT, sys.executable)
+    log("  settings.json, opencode.json, run.ps1, run.sh written")
 
     log("=== 5/6 Validation ===")
     test_results = {}
@@ -225,7 +302,8 @@ def run_pipeline_llamacpp(model, quant, profile, hw, skip_tests=False, port=8080
         log("  skipped (--skip-tests)")
 
     log("=== 6/6 OpenCode ===")
-    oc_result = _setup_opencode(model["id"], port, install_node, log)
+    oc_result = _setup_opencode(model["id"], port, install_node, log,
+                                allow_ps_scripts=allow_ps_scripts, skip_smoke=skip_tests)
     test_results.update(oc_result)
 
     _write_results_md(report, test_results, log)
@@ -235,33 +313,31 @@ def run_pipeline_llamacpp(model, quant, profile, hw, skip_tests=False, port=8080
         server.kill_existing_server(ROOT)
     else:
         log(f"Server left running on http://127.0.0.1:{port}/v1 (pid {proc.pid})")
-
+    log("")
+    log("Done. To code: open a terminal in your project folder and run   opencode-local")
+    log("  thinking off for one session:  opencode-local --think off")
+    log("  stop the model server:         opencode-local --stop")
     return {"report": report, "tests": test_results}
 
 
-def _llamacpp_memory_preflight(model, quant, profile, log):
-    """Warn when free VRAM/RAM right now is below the estimate.
-
-    The model and context profile are picked from total capacity (see
-    catalog.fit_verdict), so a busy desktop no longer silently downgrades the
-    recommendation. This check covers the other half: if something else is
-    holding memory at serve time, say so before llama-server spills into
-    shared GPU memory or swap. It only warns; it never changes the pick."""
-    live = hwdetect.detect(ROOT)
+def _memory_plan(model, quant, profile, hw, log):
+    """Say what the setup needs against TOTAL memory. Free memory is not
+    checked: browsers and the file cache give memory back when the model
+    loads, and llama.cpp --fit sizes the GPU part to what the GPU has."""
     need_vram, need_ram = catalog.estimate_requirements(model, quant, profile)
-    problems = []
-    if live.vram_free_gb is not None and live.vram_free_gb < need_vram:
-        problems.append(f"~{live.vram_free_gb:.1f} GB VRAM free vs ~{need_vram:.1f} GB wanted")
-    if live.ram_free_gb is not None and live.ram_free_gb < need_ram:
-        problems.append(f"~{live.ram_free_gb:.1f} GB RAM free vs ~{need_ram:.1f} GB wanted")
-    if problems:
-        log("  [preflight] WARNING: " + "; ".join(problems) + ". Other apps are "
-            "holding memory. The server will still start, but it may run slowly "
-            "(shared GPU memory / swap) or fail to load. Close them, or re-run "
-            "with --profile conservative or a smaller quant.")
-    else:
-        log(f"  [preflight] free memory OK (~{need_vram:.1f} GB VRAM / "
-            f"~{need_ram:.1f} GB RAM wanted)")
+    have = []
+    if hw.vram_total_gb:
+        have.append(f"{hw.vram_total_gb:.0f} GB VRAM")
+    if hw.ram_total_gb:
+        have.append(f"{hw.ram_total_gb:.0f} GB RAM")
+    log(f"  memory plan: needs ~{need_vram:.1f} GB VRAM minimum and ~{need_ram:.0f} GB RAM; "
+        f"this PC has {' / '.join(have) or 'unknown memory'} in total.")
+    if model["arch"] == "moe" and hw.vram_total_gb:
+        log("  spare VRAM above the minimum holds expert layers (llama.cpp --fit): "
+            "more VRAM = faster")
+    if catalog.hw_fit_verdict(model, quant, profile, hw) == "no":
+        log("  WARNING: this is more than the PC's total memory; it may fail to load. "
+            "Choose a smaller context or quant.")
 
 
 def _mlx_memory_preflight(model, quant, log):
@@ -396,7 +472,8 @@ def _run_validate(port, model_id, log):
     return results
 
 
-def _setup_opencode(model_id, port, install_node, log, provider_key="llamacpp"):
+def _setup_opencode(model_id, port, install_node, log, provider_key="llamacpp",
+                    allow_ps_scripts=None, skip_smoke=False):
     results = {}
     node = opencode_setup.find_node()
     if not node:
@@ -413,9 +490,20 @@ def _setup_opencode(model_id, port, install_node, log, provider_key="llamacpp"):
     log("Installing OpenCode (npm) ...")
     opencode_setup.npm_install_opencode(log)
     dest = opencode_setup.install_config(os.path.join(ROOT, "opencode.json"))
-    log(f"  opencode.json -> {dest}")
+    log(f"  OpenCode config -> {dest}")
     if not opencode_setup.ensure_opencode_on_path(log):
         results["opencode-agentic"] = "FAIL"
+        return results
+    if provider_key == "llamacpp":
+        opencode_setup.install_launcher(ROOT, sys.executable, log)
+    if opencode_setup.powershell_scripts_blocked():
+        if allow_ps_scripts:
+            opencode_setup.allow_powershell_scripts(log)
+        else:
+            log("  NOTE: PowerShell blocks scripts on this PC, so a plain `opencode` fails; "
+                "`opencode-local` and `opencode.cmd` work. To allow it: "
+                "Set-ExecutionPolicy -Scope CurrentUser RemoteSigned")
+    if skip_smoke:
         return results
     scratch = os.path.join(ROOT, "opencode-scratch")
     alias = f"{provider_key}/{model_id}"
@@ -447,8 +535,21 @@ def _write_results_md(report, test_results, log):
 
 def parse_args():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--gui", action="store_true", help="force the GUI wizard")
-    p.add_argument("--cli", action="store_true", help="force the text wizard")
+    p.add_argument("--gui", action="store_true", help="use the Tkinter window instead of the "
+                                                      "text wizard")
+    p.add_argument("--cli", action="store_true", help="text wizard (the default)")
+    p.add_argument("--hf", metavar="LINK", help="any GGUF model from Hugging Face: a "
+                   "https://huggingface.co/OWNER/NAME link (a file link picks that file) "
+                   "or OWNER/NAME")
+    p.add_argument("--hf-file", metavar="FILE", help="with --hf: which .gguf file "
+                   "(default: the Q4_K_M-class one)")
+    p.add_argument("--think", choices=settings.THINK_MODES, default=None,
+                   help="thinking: limited (default, capped by --think-budget), off, on "
+                        "(unlimited). Change later with opencode-local --think ...")
+    p.add_argument("--think-budget", type=int, default=None, metavar="TOKENS",
+                   help="token cap for --think limited (default 4096)")
+    p.add_argument("--update-llamacpp", action="store_true",
+                   help="replace an existing llama.cpp folder with the newest build")
     p.add_argument("--list-models", action="store_true", help="print the catalog and exit")
     p.add_argument("--model", help="catalog model id, e.g. qwen3.6-35b-a3b (see --list-models)")
     p.add_argument("--quant", help="quant GGUF filename (llama.cpp) or mlx-community repo id "
@@ -456,9 +557,9 @@ def parse_args():
     p.add_argument("--profile", choices=["auto", "primary", "conservative"], default="auto",
                     help="llama.cpp context profile; auto picks the largest context that fits total VRAM with a 1 GB reserve")
     p.add_argument("--ctx", type=int, default=None, metavar="TOKENS",
-                    help="fixed context size instead of a profile, e.g. 131072 or 262144 "
-                         "(MoE models hold 262144 in ~5.4 GB VRAM; dense models are only "
-                         "measured to 32768). Also sets the OpenCode context limit")
+                    help="context size, e.g. 65536 or 262144 (default: by total VRAM - "
+                         "64K below 16 GB, 128K below 24 GB, 256K above, for MoE models). "
+                         "Also sets the OpenCode context limit")
     p.add_argument("--port", type=int, default=None,
                     help="default 8080 for llama.cpp, 8000 for rapid-mlx")
     p.add_argument("--bin-dir", default=None, help="llama.cpp only: reuse an existing llama.cpp folder")
@@ -476,7 +577,7 @@ def parse_args():
                    help="auto-install Node if missing: winget (Windows), Homebrew (macOS), "
                         "official nodejs.org tarball into ./node (Linux, no sudo)")
     p.add_argument("--non-interactive", action="store_true",
-                    help="require --model/--quant, never prompt")
+                    help="never prompt; needs --model or --hf")
     return p.parse_args()
 
 
@@ -502,9 +603,21 @@ def main():
     hw = hwdetect.detect(ROOT)
     engine = hwdetect.pick_engine(hw)
     port = args.port if args.port is not None else (8000 if engine == "rapidmlx" else 8080)
+    args.allow_ps_scripts = None
+    args.update_llamacpp = bool(args.update_llamacpp)
 
     model = quant = None
-    if args.model:
+    if args.hf:
+        if engine == "rapidmlx":
+            die("--hf installs GGUF models for llama.cpp (Windows/Linux); on a Mac pick a "
+                "catalog model.")
+        try:
+            model, quant, _ggufs = hf.resolve(args.hf, args.hf_file)
+        except (ValueError, OSError) as e:
+            die(str(e))
+        print(f"Hugging Face model: {model['display_name']} -> {quant['file']} "
+              f"({quant['size_gb']:.1f} GB, {model['arch']})")
+    elif args.model:
         model = catalog.get_model(args.model)
         if engine == "rapidmlx":
             quant = (catalog.get_mlx_quant(model, args.quant) if args.quant
@@ -514,47 +627,53 @@ def main():
 
     if model is None:
         if args.non_interactive:
-            die("--non-interactive requires --model (and optionally --quant)")
-        use_gui = args.gui or (not args.cli)
-        if use_gui:
+            die("--non-interactive requires --model or --hf")
+        if args.gui:
             from installer import tk_setup
             gui_ready, detail = tk_setup.ensure_tkinter(print)
             if not gui_ready:
-                if args.gui:
-                    die(detail)
-                print(f"{detail}\nFalling back to the text wizard.")
-                use_gui = False
-        if use_gui:
+                die(detail)
             from installer import gui
 
             def pipeline_for_gui(m, q, prof, hw_, skip_tests, install_node, log, progress):
                 args.install_node = install_node
                 if args.ctx:
-                    m = dict(m, ctx_override=args.ctx)
+                    m = catalog.with_ctx(m, args.ctx)
                 _dispatch(m, q, prof, hw_, engine, port, args, skip_tests, log, progress)
 
             gui.run_gui(hw, pipeline_for_gui)
             return
+        from installer import cli
+        if engine == "rapidmlx":
+            model, quant = cli.choose_mlx_model_quant(hw)
         else:
-            from installer import cli
-            if engine == "rapidmlx":
-                model, quant = cli.choose_mlx_model_quant(hw)
-            else:
-                model, quant, args.profile = cli.choose_model_quant(hw)
+            bin_dir = args.bin_dir or os.path.join(ROOT, "llama.cpp")
+            update_info = None
+            have = installed_build(bin_dir)
+            if have and not args.bin_dir:
+                newest, _assets = latest_build(args.backend if args.backend != "auto" else
+                                               hwdetect.pick_llamacpp_backend(hw),
+                                               getattr(hw, "cuda_driver", None))
+                if newest and newest > have:
+                    update_info = (have, newest)
+            choice = cli.run_wizard(hw, update_info=update_info,
+                                    scripts_blocked=opencode_setup.powershell_scripts_blocked())
+            model, quant = choice["model"], choice["quant"]
+            args.ctx = args.ctx or choice["ctx"]
+            args.think = args.think or choice["thinking"]
+            args.think_budget = args.think_budget or choice["think_budget"]
+            args.update_llamacpp = args.update_llamacpp or choice["update_llamacpp"]
+            args.allow_ps_scripts = choice["allow_ps_scripts"]
 
-    if args.ctx:
-        model = dict(model, ctx_override=args.ctx)
-        if engine != "rapidmlx" and args.profile == "auto":
-            args.profile = "primary"
-        print(f"Context fixed at {args.ctx:,} tokens (--ctx).")
-        if engine != "rapidmlx" and catalog.hw_fit_verdict(model, quant, args.profile, hw) == "no":
-            print("  [WARN] estimated not to fit at this context on this machine; "
-                  "llama-server may fail to load. Try a smaller --ctx.")
-    if engine != "rapidmlx" and args.profile == "auto":
-        args.profile = catalog.recommended_profile(model, quant, hw)
-        print(f"Auto-selected {args.profile} context profile "
-              f"({catalog.ctx_sizes(model)[args.profile]:,} tokens with VRAM reserve).")
-    profile = None if engine == "rapidmlx" else args.profile
+    profile = None
+    if engine != "rapidmlx":
+        ctx = args.ctx or catalog.default_ctx(model, hw)
+        model = catalog.with_ctx(model, ctx)
+        profile = "primary"
+        print(f"Context: {ctx:,} tokens.")
+        if catalog.hw_fit_verdict(model, quant, profile, hw) == "no":
+            print("  [WARN] estimated to need more than this PC's total memory at this "
+                  "context; llama-server may fail to load. Try a smaller --ctx or quant.")
     _dispatch(model, quant, profile, hw, engine, port, args, args.skip_tests, print,
               lambda *a: None)
 
@@ -577,6 +696,10 @@ def _dispatch(model, quant, profile, hw, engine, port, args, skip_tests, log, pr
                               bin_dir=args.bin_dir, model_path=args.model_path,
                               install_node=args.install_node, stop_when_done=args.stop_when_done,
                               backend=selected_backend, extra_server_args=args.extra_server_arg,
+                              thinking=getattr(args, "think", None),
+                              think_budget=getattr(args, "think_budget", None),
+                              update_llamacpp=getattr(args, "update_llamacpp", False),
+                              allow_ps_scripts=getattr(args, "allow_ps_scripts", None),
                               log=log, progress=progress)
 
 

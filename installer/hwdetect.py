@@ -20,6 +20,7 @@ class Hardware:
         self.vram_total_gb = None
         self.vram_free_gb = None
         self.compute_cap = None                   # NVIDIA only
+        self.cuda_driver = None                   # NVIDIA: (major, minor) the driver supports
         self.ram_total_gb = None
         self.ram_free_gb = None                   # best-effort on macOS - see _detect_ram_macos
         self.disk_free_gb = None
@@ -77,6 +78,13 @@ def _detect_nvidia(hw):
     except ValueError:
         pass
     hw.compute_cap = parts[3]
+    # Highest CUDA version the driver supports ("CUDA Version: 12.4" on older
+    # drivers, "CUDA UMD Version: 13.5" on newer ones); picks the llama.cpp
+    # CUDA build to download.
+    head = _run(["nvidia-smi"])
+    m = re.search(r"CUDA (?:UMD )?Version:\s*(\d+)\.(\d+)", head.stdout if head else "")
+    if m:
+        hw.cuda_driver = (int(m.group(1)), int(m.group(2)))
     return True
 
 
