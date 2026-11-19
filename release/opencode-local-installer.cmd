@@ -41,7 +41,10 @@ $tmp = Join-Path $env:TEMP ("ocl-" + [guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Path $tmp | Out-Null
 $zip = Join-Path $tmp "src.zip"
 Invoke-WebRequest -Uri $url -OutFile $zip -Headers $ua -UseBasicParsing
-Expand-Archive -Path $zip -DestinationPath (Join-Path $tmp "x")
+# .NET directly: Expand-Archive breaks when PowerShell 7's module path leaks
+# into Windows PowerShell (started from a pwsh terminal).
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+[System.IO.Compression.ZipFile]::ExtractToDirectory($zip, (Join-Path $tmp "x"))
 $src = Get-ChildItem (Join-Path $tmp "x") -Directory | Select-Object -First 1
 
 # Copy over the release's files. Downloaded models, llama.cpp, settings.json
@@ -52,7 +55,6 @@ Remove-Item -LiteralPath $tmp -Recurse -Force
 Write-Host "Files are in $dest"
 Write-Host ""
 
-$setupArgs = @()
-if ($env:OCL_ARGS) { $setupArgs = $env:OCL_ARGS -split '\s+' | Where-Object { $_ } }
-& (Join-Path $dest "setup.cmd") @setupArgs
+$env:OCL_SETUP_ARGS = $env:OCL_ARGS
+& (Join-Path $dest "setup.cmd")
 exit $LASTEXITCODE

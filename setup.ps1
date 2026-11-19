@@ -53,7 +53,14 @@ if (-not $py) {
 }
 $exe = $py[0]
 $pre = @($py | Select-Object -Skip 1)
-& $exe @pre (Join-Path $PSScriptRoot "install.py") --install-node @args
+# setup.cmd hands its arguments over in OCL_SETUP_ARGS: on the command line,
+# Windows PowerShell would take "--hf" etc. as its own parameter names.
+$passArgs = @()
+if ($env:OCL_SETUP_ARGS) {
+    $passArgs = @([regex]::Matches($env:OCL_SETUP_ARGS, '"[^"]*"|\S+') |
+                  ForEach-Object { $_.Value.Trim('"') })
+}
+& $exe @pre (Join-Path $PSScriptRoot "install.py") --install-node @passArgs @args
 $rc = $LASTEXITCODE
 
 # Double-clicked setup.cmd (Explorer -> cmd -> this script): keep the window
