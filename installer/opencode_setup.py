@@ -336,12 +336,31 @@ def _run_opencode(args, cwd, timeout_s):
     exe = find_opencode()
     if not exe:
         return None
+    windows = platform.system() == "Windows"
+    p = subprocess.Popen([exe] + args, cwd=cwd, stdin=subprocess.DEVNULL,
+                         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                         encoding="utf-8", errors="replace", shell=windows,
+                         **({"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if windows
+                            else {"start_new_session": True}))
     try:
-        r = subprocess.run([exe] + args, cwd=cwd, capture_output=True, text=True,
-                            encoding="utf-8", errors="replace",
-                            timeout=timeout_s, shell=(platform.system() == "Windows"))
-        return r
+        out, err = p.communicate(timeout=timeout_s)
+        return subprocess.CompletedProcess(p.args, p.returncode, out, err)
     except subprocess.TimeoutExpired:
+        # Kill the whole tree: killing only the opencode.cmd wrapper leaves
+        # opencode.exe running with our pipes open, and communicate() then
+        # waits forever.
+        if windows:
+            subprocess.run(["taskkill", "/PID", str(p.pid), "/T", "/F"], capture_output=True)
+        else:
+            import signal
+            try:
+                os.killpg(p.pid, signal.SIGKILL)
+            except OSError:
+                pass
+        try:
+            p.communicate(timeout=15)
+        except subprocess.TimeoutExpired:
+            pass
         return None
 
 

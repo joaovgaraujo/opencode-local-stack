@@ -43,6 +43,9 @@ PLACEMENT_FLAGS = ("-ngl", "--n-gpu-layers", "--gpu-layers", "--cpu-moe", "-cmoe
                    "--n-cpu-moe", "-ot", "--override-tensor", "-fit", "--fit")
 BATCH_FLAGS = ("-ub", "--ubatch-size", "-b", "--batch-size")
 REASONING_FLAGS = ("-rea", "--reasoning", "--reasoning-budget")
+PARALLEL_FLAGS = ("-np", "--parallel")
+# OpenCode's system prompt and tool definitions take ~10K tokens.
+MIN_CTX = 32768
 
 
 def path(root):
@@ -95,6 +98,12 @@ def server_args(s, root):
     if not user_sets(extra, KV_V_FLAGS):
         args += ["-ctv", s["kv_type"]]
     args += ["--jinja", "--host", "127.0.0.1", "--port", str(s["port"])]
+    if not user_sets(extra, PARALLEL_FLAGS):
+        # One slot. llama.cpp's default (4 slots sharing one KV cache) breaks
+        # when OpenCode sends its title/summary requests alongside the main
+        # one: "failed to find N available cells in kv cache", and OpenCode
+        # retries without end. With one slot the extra requests just queue.
+        args += ["--parallel", "1"]
     if not user_sets(extra, PLACEMENT_FLAGS):
         if gpu:
             args += ["--fit", "on", "--fit-target", str(s["fit_margin_mib"])]

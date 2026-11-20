@@ -99,8 +99,11 @@ try:
     needle = "REMEMBER THIS: the secret vault access code is PURPLE-WOMBAT-4291."
     filler_line = ("The quick brown fox jumps over the lazy dog while the diligent engineer "
                    "reviews configuration files and verifies cache behavior. ")
-    # ~30k tokens: build many numbered lines, target ~120k chars.
-    lines, target_chars = [], 145000   # ~30k prompt tokens with this filler's ~4.75 chars/token
+    # ~30k prompt tokens (this filler runs ~4.75 chars/token), or less when the
+    # server's context is smaller: LLAMA_CTX minus room for the 3,072-token answer.
+    ctx = int(os.environ.get("LLAMA_CTX") or 0)
+    target_tokens = min(30000, ctx - 4096) if ctx else 30000
+    lines, target_chars = [], int(target_tokens * 4.75)
     i, cur = 0, 0
     while cur < target_chars:
         s = f"[line {i:05d}] {filler_line}"

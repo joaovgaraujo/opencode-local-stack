@@ -304,7 +304,7 @@ def run_pipeline_llamacpp(model, quant, profile, hw, skip_tests=False, port=8080
     log("=== 5/6 Validation ===")
     test_results = {}
     if not skip_tests:
-        test_results = _run_validate(port, model["id"], log)
+        test_results = _run_validate(port, model["id"], log, ctx=ctx)
     else:
         log("  skipped (--skip-tests)")
 
@@ -456,11 +456,12 @@ def run_pipeline_mlx(model, quant, hw, skip_tests=False, port=8000, install_node
     return {"report": report, "tests": test_results}
 
 
-def _run_validate(port, model_id, log):
-    import subprocess
+def _run_validate(port, model_id, log, ctx=None):
     env = dict(os.environ)
     env["LLAMA_BASE_URL"] = f"http://127.0.0.1:{port}/v1"
     env["LLAMA_MODEL"] = model_id
+    if ctx:
+        env["LLAMA_CTX"] = str(ctx)  # the needle test sizes its prompt to fit
     python_exe = sys.executable
     # encoding/errors explicit: on Windows, text=True alone decodes with the
     # console's active code page (e.g. cp1252), which crashes on non-ASCII
@@ -692,6 +693,10 @@ def main():
         model = catalog.with_ctx(model, ctx)
         profile = "primary"
         print(f"Context: {ctx:,} tokens.")
+        if ctx < settings.MIN_CTX:
+            print(f"  [WARN] OpenCode's own instructions and tools take ~10K tokens; below "
+                  f"{settings.MIN_CTX:,} it runs out of room and keeps retrying. Use "
+                  f"--ctx {settings.MIN_CTX} or more.")
         if catalog.hw_fit_verdict(model, quant, profile, hw) == "no":
             print("  [WARN] estimated to need more than this PC's total memory at this "
                   "context; llama-server may fail to load. Try a smaller --ctx or quant.")

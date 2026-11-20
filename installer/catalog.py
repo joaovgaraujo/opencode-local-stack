@@ -69,7 +69,7 @@ MLX_KV_FACTOR = {"gemma": 1.07, "qwen": 0.0}  # KV+prefill per GB of weights
 MLX_KV_FACTOR_DEFAULT = 0.4     # unknown family: assume moderate KV weight
 
 # Context sizes the wizard offers, per architecture.
-CTX_CHOICES = {"moe": [32768, 65536, 131072, 262144], "dense": [16384, 32768, 65536]}
+CTX_CHOICES = {"moe": [32768, 65536, 131072, 262144], "dense": [32768, 65536]}
 
 CTX_PROFILES = {
     "moe":   {"primary": 65536, "conservative": 32768},
