@@ -46,8 +46,8 @@ jobs:
       - name: Checksums
         shell: pwsh
         run: |
-          Copy-Item release\opencode-local-installer.cmd dist\
-          Get-FileHash dist\OpenCodeLocal-Setup.exe,dist\opencode-local-installer.cmd -Algorithm SHA256 |
+          Copy-Item release\opencode-local-installer.cmd, release\opencode-local-installer.sh dist\
+          Get-FileHash dist\OpenCodeLocal-Setup.exe,dist\opencode-local-installer.cmd,dist\opencode-local-installer.sh -Algorithm SHA256 |
             ForEach-Object { "{0}  {1}" -f $_.Hash.ToLower(), (Split-Path $_.Path -Leaf) } |
             Set-Content dist\SHA256SUMS.txt
           Get-Content dist\SHA256SUMS.txt
@@ -68,4 +68,5 @@ jobs:
           files: |
             dist/OpenCodeLocal-Setup.exe
             dist/opencode-local-installer.cmd
+            dist/opencode-local-installer.sh
             dist/SHA256SUMS.txt

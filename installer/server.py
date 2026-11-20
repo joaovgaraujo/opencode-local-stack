@@ -124,6 +124,31 @@ def start_server(server_bin, args, log_out_path, log_err_path, root=None):
     return proc
 
 
+def device_memory(server_bin):
+    """[(total_mib, free_mib), ...] per GPU from `llama-server --list-devices`
+    ("CUDA0: NAME (11956 MiB, 10924 MiB free)"); [] when unknown."""
+    import re
+    try:
+        r = subprocess.run([server_bin, "--list-devices"], capture_output=True, text=True,
+                           timeout=60, encoding="utf-8", errors="replace")
+    except (OSError, subprocess.SubprocessError):
+        return []
+    out = (r.stdout or "") + (r.stderr or "")
+    return [(int(t), int(f)) for t, f in re.findall(r"\((\d+) MiB, (\d+) MiB free\)", out)]
+
+
+def fit_target_for(server_bin, margin_mib):
+    """--fit-target value: the margin itself, unless the runtime reports more
+    free memory than the card has. Seen with a CUDA 13.3 source build on a
+    laptop (55421 MiB "free" on a 11956 MiB GPU): --fit then plans the whole
+    model onto the GPU and loading fails with cudaMalloc out of memory. In
+    that case raise the margin so --fit uses at most total - margin."""
+    mems = device_memory(server_bin)
+    if not mems or all(free <= total for total, free in mems):
+        return str(margin_mib)
+    return ",".join(str(max(margin_mib, free - total + margin_mib)) for total, free in mems)
+
+
 def wait_for_health(port, timeout_s=360, interval_s=2, path="/health", process=None):
     """Poll path until it returns HTTP 200, stopping if a child server exits.
 

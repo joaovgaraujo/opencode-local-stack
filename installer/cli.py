@@ -122,16 +122,30 @@ def _choose_thinking():
     return {"1": "limited", "2": "off", "3": "on"}[ans]
 
 
-def run_wizard(hw, update_info=None, scripts_blocked=False):
+def _choose_linux_cuda(build_tools_ok):
+    print("\n=== Step 4: llama.cpp for your NVIDIA GPU ===")
+    print("  [1] download the prebuilt CUDA build (needs Ubuntu 24.04 or newer)  <- recommended")
+    print("  [2] build it from source with CUDA (5-20 minutes; needs git, cmake, a C++ "
+          "compiler and the CUDA toolkit)" + ("" if build_tools_ok else "  - not all found"))
+    print("  If the prebuilt can't run on this system, the installer builds from source "
+          "anyway when the tools are there.")
+    return ask("Choose", 1, {"1", "2"}) == "2"
+
+
+def run_wizard(hw, update_info=None, scripts_blocked=False, linux_cuda=None):
     """Return a dict of choices for install.py. update_info = (installed_build,
-    latest_build) when an older llama.cpp is already present."""
+    latest_build) when an older llama.cpp is already present. linux_cuda =
+    True/False (build tools present) asks prebuilt vs source build on Linux
+    with NVIDIA; None skips the question."""
     print_hardware(hw)
     model, quant = _choose_catalog(hw)
     ctx = _choose_ctx(model, quant, hw)
     thinking = _choose_thinking()
     out = {"model": model, "quant": quant, "ctx": ctx, "thinking": thinking,
            "think_budget": settings.DEFAULTS["think_budget"], "update_llamacpp": False,
-           "allow_ps_scripts": False}
+           "allow_ps_scripts": False, "build_llamacpp": False}
+    if linux_cuda is not None:
+        out["build_llamacpp"] = _choose_linux_cuda(linux_cuda)
     print()
     if update_info:
         out["update_llamacpp"] = confirm(f"Update llama.cpp from build {update_info[0]} to "

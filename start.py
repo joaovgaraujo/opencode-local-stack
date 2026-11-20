@@ -30,7 +30,7 @@ import urllib.request
 ROOT = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, ROOT)
 
-from installer import opencode_setup, server, settings  # noqa: E402
+from installer import opencode_setup, rapidmlx_setup, server, settings  # noqa: E402
 
 STATE_FILE = os.path.join(ROOT, ".server-state.json")
 
@@ -54,12 +54,16 @@ def parse_args():
     return p.parse_known_args()
 
 
-def healthy(port):
+def healthy(port, path="/health"):
     try:
-        with urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=3) as r:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}{path}", timeout=3) as r:
             return r.status == 200
     except OSError:
         return False
+
+
+def health_path(s):
+    return "/v1/models" if settings.is_mlx(s) else "/health"
 
 
 def read_state():
@@ -72,6 +76,7 @@ def read_state():
 
 def stop():
     server.kill_existing_server(ROOT)
+    rapidmlx_setup.kill_existing(ROOT)
     try:
         os.remove(STATE_FILE)
     except OSError:
@@ -88,11 +93,16 @@ def tail(path, n=15):
 
 def ensure_server(s):
     """Start llama-server with settings s unless the same one is already up."""
+    if not settings.is_mlx(s) and s.get("backend") != "cpu":
+        exe = server.find_server_binary(settings.resolve_path(ROOT, s["bin_dir"]))
+        if exe:
+            s["fit_target_runtime"] = server.fit_target_for(exe, s["fit_margin_mib"])
     args = settings.server_args(s, ROOT)
     port = s["port"]
     state = read_state()
-    if healthy(port):
-        if state and state.get("args") == args:
+    hpath = health_path(s)
+    if healthy(port, hpath):
+        if state and settings.comparable(state.get("args") or []) == settings.comparable(args):
             return True
         if not state:
             print(f"Something else is already serving port {port} (not started by "
@@ -100,16 +110,24 @@ def ensure_server(s):
             return False
         print("Settings changed; restarting the model server ...")
     stop()
-    bin_path = server.find_server_binary(settings.resolve_path(ROOT, s["bin_dir"]))
-    if not bin_path:
-        print(f"llama-server not found in {s['bin_dir']}. Re-run setup.cmd / install.py.")
-        return False
-    model_path = settings.resolve_path(ROOT, s["model_path"])
-    if not os.path.exists(model_path):
-        print(f"Model file missing: {model_path}. Re-run setup.cmd / install.py.")
-        return False
     log_out, log_err = os.path.join(ROOT, "server.log"), os.path.join(ROOT, "server.err")
-    proc = server.start_server(bin_path, args, log_out, log_err, root=ROOT)
+    if settings.is_mlx(s):
+        exe = rapidmlx_setup.find_rapidmlx(ROOT)
+        if not exe:
+            print("rapid-mlx not found. Re-run setup.sh / install.py.")
+            return False
+        proc = rapidmlx_setup.start_rapidmlx(exe, args, log_out, log_err)
+        rapidmlx_setup.write_pid(ROOT, proc.pid)
+    else:
+        bin_path = server.find_server_binary(settings.resolve_path(ROOT, s["bin_dir"]))
+        if not bin_path:
+            print(f"llama-server not found in {s['bin_dir']}. Re-run setup.cmd / install.py.")
+            return False
+        model_path = settings.resolve_path(ROOT, s["model_path"])
+        if not os.path.exists(model_path):
+            print(f"Model file missing: {model_path}. Re-run setup.cmd / install.py.")
+            return False
+        proc = server.start_server(bin_path, args, log_out, log_err, root=ROOT)
     with open(STATE_FILE, "w", encoding="utf-8") as f:
         json.dump({"pid": proc.pid, "args": args}, f)
     print(f"Loading {s['display_name']} (first start takes about a minute) ", end="", flush=True)
@@ -123,7 +141,7 @@ def ensure_server(s):
             except OSError:
                 pass
             return False
-        if healthy(port):
+        if healthy(port, hpath):
             print(f" ready ({time.time() - t0:.0f} s)")
             return True
         print(".", end="", flush=True)
@@ -137,7 +155,11 @@ def write_opencode_config(s):
     model = {"id": s["model_id"], "display_name": s["display_name"],
              "reasoning": s.get("reasoning", True)}
     path = os.path.join(ROOT, "opencode.json")
-    server.write_opencode_json(path, model, s["port"], s["ctx"])
+    if settings.is_mlx(s):
+        server.write_opencode_json(path, model, s["port"], s["ctx"], provider_key="rapidmlx",
+                                   provider_label="rapid-mlx (local)")
+    else:
+        server.write_opencode_json(path, model, s["port"], s["ctx"])
     opencode_setup.install_config(path)
 
 
@@ -160,6 +182,7 @@ def main():
             s["thinking"] = "limited"
     if opts.ctx:
         s["ctx"] = opts.ctx
+        s["ctx_explicit"] = opts.ctx
     if opts.idle_minutes is not None:
         s["idle_minutes"] = max(0, opts.idle_minutes)
     if opts.save:
@@ -167,7 +190,7 @@ def main():
         print("Saved as default.")
     if opts.status:
         state = read_state()
-        up = healthy(s["port"])
+        up = healthy(s["port"], health_path(s))
         print(("Running: " if up else "Not running. Default: ") + settings.describe(s))
         if up and state and state.get("args") != settings.server_args(s, ROOT):
             print("  (the running server uses different settings; the next start restarts it)")

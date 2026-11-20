@@ -2,8 +2,8 @@
 Pure stdlib (urllib) so no extra dependency is needed on either OS."""
 import json
 import os
+import platform
 import re
-import shutil
 import tarfile
 import urllib.error
 import urllib.request
@@ -22,9 +22,13 @@ ASSET_PATTERNS = {
     ("rocm", "Windows"): [r"^llama-.*-bin-win-rocm-[\d.]+-x64\.zip$",
                           r"^llama-.*-bin-win-hip-radeon-x64\.zip$"],
     ("cpu", "Windows"): [r"^llama-.*-bin-win-cpu-x64\.zip$"],
-    ("vulkan", "Linux"): [r"^llama-.*-bin-ubuntu-vulkan-x64\.tar\.gz$"],
+    ("vulkan", "Linux"): [r"^llama-.*-bin-ubuntu-vulkan-{arch}\.tar\.gz$"],
     ("rocm", "Linux"): [r"^llama-.*-bin-ubuntu-rocm-[\d.]+-x64\.tar\.gz$"],
-    ("cpu", "Linux"): [r"^llama-.*-bin-ubuntu-x64\.tar\.gz$"],
+    ("cpu", "Linux"): [r"^llama-.*-bin-ubuntu-{arch}\.tar\.gz$"],
+    # Prebuilt Linux CUDA builds (since 2026-11): picked by pick_cuda_asset.
+    # They need glibc 2.38+ (Ubuntu 24.04, Debian 13, Fedora 39 or newer);
+    # older systems build from source (install.py --build-llamacpp).
+    ("cuda", "Linux"): [r"^llama-.*-bin-ubuntu-cuda-[\d.]+-{arch}\.tar\.gz$"],
 }
 # CUDA runtime redistributable, only needed alongside the Windows CUDA build.
 CUDART_PATTERNS = [r"^cudart-llama-bin-win-cuda-12\.\d+-x64\.zip$",
@@ -42,13 +46,25 @@ def _cuda_version(name):
     return (int(m.group(1)), int(m.group(2))) if m else None
 
 
-def pick_cuda_asset(assets, prefix, cuda_driver):
-    """Newest x64 CUDA build of `prefix` ("llama-" or "cudart-") the driver
-    can run; the oldest one when the driver version is unknown or too old
-    for all of them (12.4 runs on any recent driver)."""
+def cpu_arch():
+    """'x64' or 'arm64', as llama.cpp names its release assets."""
+    m = platform.machine().lower()
+    return "arm64" if m in ("arm64", "aarch64") else "x64"
+
+
+def _plat(os_name):
+    return {"Windows": ("win", ".zip"), "Linux": ("ubuntu", ".tar.gz")}[os_name]
+
+
+def pick_cuda_asset(assets, prefix, cuda_driver, os_name="Windows"):
+    """Newest CUDA build of `prefix` ("llama-" or "cudart-") for this OS and
+    CPU that the driver can run; the oldest one when the driver version is
+    unknown or too old for all of them."""
+    plat, ext = _plat(os_name)
+    tail = f"-{cpu_arch()}{ext}"
     cands = [(v, a) for a in assets
-             if a["name"].startswith(prefix) and "-win-cuda-" in a["name"]
-             and a["name"].endswith("-x64.zip") and (v := _cuda_version(a["name"]))]
+             if a["name"].startswith(prefix) and f"-{plat}-cuda-" in a["name"]
+             and a["name"].endswith(tail) and (v := _cuda_version(a["name"]))]
     if not cands:
         return None
     cands.sort(key=lambda c: c[0])
@@ -63,7 +79,7 @@ def resolve_llamacpp_assets(backend, os_name, cuda_driver=None):
     if os_name not in ("Windows", "Linux"):
         raise RuntimeError(f"No prebuilt llama.cpp release for OS {os_name!r}. "
                             f"Build from source: https://github.com/ggml-org/llama.cpp")
-    patterns = ASSET_PATTERNS.get((backend, os_name))
+    patterns = [p.replace("{arch}", cpu_arch()) for p in ASSET_PATTERNS.get((backend, os_name), [])]
     if not patterns:
         raise RuntimeError(f"No known llama.cpp release asset for backend={backend} os={os_name}")
 
@@ -90,8 +106,8 @@ def resolve_llamacpp_assets(backend, os_name, cuda_driver=None):
                     return a
         return None
 
-    binary = (pick_cuda_asset(assets, "llama-", cuda_driver)
-              if (backend, os_name) == ("cuda", "Windows") else None) or match_first(patterns)
+    binary = (pick_cuda_asset(assets, "llama-", cuda_driver, os_name)
+              if backend == "cuda" else None) or match_first(patterns)
     if not binary:
         raise RuntimeError(f"Could not find a llama.cpp release asset matching {patterns} "
                             f"in release {release.get('tag_name')}. "
@@ -99,9 +115,13 @@ def resolve_llamacpp_assets(backend, os_name, cuda_driver=None):
     cudart = None
     if backend == "cuda":
         want = _cuda_version(binary["name"])
+        plat, ext = _plat(os_name)
         cudart = next((a for a in assets if a["name"].startswith("cudart-")
-                       and _cuda_version(a["name"]) == want and a["name"].endswith("-x64.zip")),
-                      None) or match_first(CUDART_PATTERNS)
+                       and f"-{plat}-cuda-" in a["name"]
+                       and _cuda_version(a["name"]) == want
+                       and a["name"].endswith(f"-{cpu_arch()}{ext}")), None)
+        if cudart is None and os_name == "Windows":
+            cudart = match_first(CUDART_PATTERNS)
     return {"binary": binary, "cudart": cudart, "tag": release.get("tag_name")}
 
 

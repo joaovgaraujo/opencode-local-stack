@@ -99,11 +99,23 @@ def verify_download_size(quant, path, log, fatal=True):
         return None
 
 
+BUILD_TAG_FILE = "llama.cpp-build-tag.txt"
+
+
 def installed_build(bin_dir):
-    """llama.cpp build number of the llama-server in bin_dir, or None."""
+    """llama.cpp build number of the llama-server in bin_dir, or None. A
+    source build from a shallow clone reports build 1, so build_llamacpp
+    records the release tag in BUILD_TAG_FILE next to the binary."""
     exe = server.find_server_binary(bin_dir) if os.path.isdir(bin_dir) else None
     if not exe:
         return None
+    try:
+        with open(os.path.join(os.path.dirname(exe), BUILD_TAG_FILE), encoding="utf-8") as f:
+            m = re.fullmatch(r"b(\d+)", f.read().strip())
+            if m:
+                return int(m.group(1))
+    except OSError:
+        pass
     try:
         r = subprocess.run([exe, "--version"], capture_output=True, text=True, timeout=30,
                            encoding="utf-8", errors="replace")
@@ -123,8 +135,167 @@ def latest_build(backend, cuda_driver=None):
     return (int(m.group(1)) if m else None), assets
 
 
-def ensure_llamacpp(bin_dir, backend, log, progress, cuda_driver=None, update=False):
+def server_runs(bin_dir):
+    """(True, output) when llama-server in bin_dir starts and prints its
+    version; (False, error text) when it can't run here, e.g. a prebuilt that
+    needs a newer glibc ("GLIBC_2.38 not found")."""
+    exe = server.find_server_binary(bin_dir)
+    if not exe:
+        return False, "llama-server not found"
+    try:
+        r = subprocess.run([exe, "--version"], capture_output=True, text=True, timeout=60,
+                           encoding="utf-8", errors="replace")
+    except (OSError, subprocess.SubprocessError) as e:
+        return False, str(e)
+    out = ((r.stdout or "") + (r.stderr or "")).strip()
+    return (r.returncode == 0 and "version" in out), out[-600:]
+
+
+def gpu_devices(bin_dir):
+    """Device lines from `llama-server --list-devices` (empty = CPU only)."""
+    exe = server.find_server_binary(bin_dir)
+    try:
+        r = subprocess.run([exe, "--list-devices"], capture_output=True, text=True, timeout=60,
+                           encoding="utf-8", errors="replace")
+    except (OSError, subprocess.SubprocessError):
+        return []
+    out = (r.stdout or "") + (r.stderr or "")
+    after = out.split("Available devices:", 1)[-1] if "Available devices:" in out else ""
+    return [ln.strip() for ln in after.splitlines() if ln.strip() and "(none)" not in ln]
+
+
+def _nvcc_version(nvcc):
+    try:
+        out = subprocess.run([nvcc, "--version"], capture_output=True, text=True,
+                             timeout=30).stdout
+    except (OSError, subprocess.SubprocessError):
+        return (0, 0)
+    m = re.search(r"release (\d+)\.(\d+)", out or "")
+    return (int(m.group(1)), int(m.group(2))) if m else (0, 0)
+
+
+def cuda_compiler():
+    """The newest nvcc on PATH or in /usr/local/cuda*/bin, or None. Newest
+    matters: a distro's older nvcc (Ubuntu ships 12.4) rejects a newer gcc,
+    while the toolkit from NVIDIA in /usr/local/cuda supports it."""
+    import glob
+    cands = {os.path.realpath(c) for c in
+             [shutil.which("nvcc")] + glob.glob("/usr/local/cuda*/bin/nvcc")
+             if c and os.access(c, os.X_OK)}
+    return max(cands, key=_nvcc_version) if cands else None
+
+
+def build_tools_missing(backend):
+    missing = [t for t in ("git", "cmake") if not shutil.which(t)]
+    if not any(shutil.which(c) for c in ("c++", "g++", "clang++")):
+        missing.append("a C++ compiler")
+    if backend == "cuda" and not cuda_compiler():
+        missing.append("the CUDA toolkit (nvcc)")
+    return missing
+
+
+BUILD_HELP = ("On Ubuntu/Debian: sudo apt install git cmake build-essential, and for CUDA the "
+              "toolkit from https://developer.nvidia.com/cuda-downloads (or sudo apt install "
+              "nvidia-cuda-toolkit).")
+
+
+def _swap_in(target, bin_dir, existing):
+    if existing:
+        old = bin_dir + ".old"
+        shutil.rmtree(old, ignore_errors=True)
+        os.replace(bin_dir, old)
+        os.replace(target, bin_dir)
+        shutil.rmtree(old, ignore_errors=True)
+    return os.path.dirname(server.find_server_binary(bin_dir))
+
+
+def build_llamacpp(bin_dir, backend, log, tag=None):
+    """Compile llama-server from source (Linux/macOS): the CUDA build for
+    systems where the prebuilt can't run (glibc older than 2.38) or when asked
+    with --build-llamacpp. Needs git, cmake, a C++ compiler and, for CUDA, nvcc.
+    Takes ~5-20 minutes; the source stays in llama.cpp-src for faster rebuilds."""
+    missing = build_tools_missing(backend)
+    if missing:
+        die("Building llama.cpp needs " + ", ".join(missing) + ". " + BUILD_HELP)
+    if tag is None:
+        _n, assets = latest_build(backend if backend != "cuda" else "cpu")
+        tag = (assets or {}).get("tag") or "master"
+    src = os.path.join(ROOT, "llama.cpp-src")
+    env = dict(os.environ)
+    # A shallow clone counts as build 1, and the server's web UI download then
+    # asks for release "b1", which doesn't exist; name the real release.
+    if re.fullmatch(r"b\d+", tag):
+        env["HF_UI_VERSION"] = tag
+    flags = ["-DCMAKE_BUILD_TYPE=Release", "-DLLAMA_CURL=OFF", "-DLLAMA_BUILD_TESTS=OFF",
+             "-DLLAMA_BUILD_EXAMPLES=OFF", "-DGGML_NATIVE=ON"]
+    if backend == "cuda":
+        nvcc = cuda_compiler()
+        toolkit = os.path.dirname(os.path.dirname(nvcc))
+        env["PATH"] = os.path.dirname(nvcc) + os.pathsep + env.get("PATH", "")
+        # Headers, compiler and libraries must come from ONE toolkit. Without
+        # CUDAToolkit_ROOT, CMake found nvcc 13.3 in /usr/local/cuda but linked
+        # Ubuntu's libcudart.so.12 from /usr/lib: the GPU then reported 55 GB
+        # free on a 12 GB card and kernels failed with "invalid argument".
+        # Building only for this machine's GPU (from nvidia-smi) is also faster.
+        cap = ""
+        try:
+            cap = subprocess.run(["nvidia-smi", "--query-gpu=compute_cap",
+                                  "--format=csv,noheader"], capture_output=True, text=True,
+                                 timeout=30).stdout.split()[0].replace(".", "")
+        except (OSError, subprocess.SubprocessError, IndexError):
+            pass
+        flags += ["-DGGML_CUDA=ON", f"-DCMAKE_CUDA_COMPILER={nvcc}",
+                  f"-DCUDAToolkit_ROOT={toolkit}",
+                  f"-DCMAKE_CUDA_ARCHITECTURES={cap if cap.isdigit() else 'native'}"]
+    elif backend == "vulkan":
+        flags += ["-DGGML_VULKAN=ON"]
+    elif backend == "rocm":
+        flags += ["-DGGML_HIP=ON"]
+    log(f"Building llama.cpp {tag} from source with {backend} (this takes 5-20 minutes) ...")
+
+    def run(cmd, cwd=None):
+        log("  $ " + " ".join(cmd))
+        sys.stdout.flush()
+        if subprocess.run(cmd, cwd=cwd, env=env).returncode != 0:
+            die(f"Build step failed: {' '.join(cmd)}. " + BUILD_HELP)
+
+    if os.path.isdir(os.path.join(src, ".git")):
+        run(["git", "fetch", "--depth", "1", "origin", "tag", tag], cwd=src)
+        run(["git", "checkout", "--force", tag], cwd=src)
+    else:
+        shutil.rmtree(src, ignore_errors=True)
+        run(["git", "clone", "--depth", "1", "--branch", tag,
+             "https://github.com/ggml-org/llama.cpp", src])
+    build = os.path.join(src, "build")
+    # Fresh build folder: CMake caches the CUDA libraries it found, so a
+    # leftover cache could keep linking the wrong toolkit.
+    shutil.rmtree(build, ignore_errors=True)
+    run(["cmake", "-S", src, "-B", build] + flags)
+    run(["cmake", "--build", build, "--config", "Release", "-j", str(os.cpu_count() or 4),
+         "--target", "llama-server"])
+    built = server.find_server_binary(os.path.join(build, "bin"))
+    if not built:
+        die("The build finished but llama-server is missing from llama.cpp-src/build/bin.")
     existing = server.find_server_binary(bin_dir) if os.path.isdir(bin_dir) else None
+    target = bin_dir + ".new" if existing else bin_dir
+    shutil.rmtree(target, ignore_errors=True)
+    shutil.copytree(os.path.dirname(built), target, symlinks=True)
+    with open(os.path.join(target, BUILD_TAG_FILE), "w", encoding="utf-8") as f:
+        f.write(tag + "\n")
+    resolved = _swap_in(target, bin_dir, existing)
+    log(f"Built llama.cpp {tag} ({backend}) -> {resolved}")
+    return resolved
+
+
+def ensure_llamacpp(bin_dir, backend, log, progress, cuda_driver=None, update=False,
+                    build=False):
+    existing = server.find_server_binary(bin_dir) if os.path.isdir(bin_dir) else None
+    # --build-llamacpp: compile unless the installed llama-server was itself
+    # built here (BUILD_TAG_FILE next to it) and no update was asked for.
+    source_built = bool(existing) and os.path.exists(
+        os.path.join(os.path.dirname(existing), BUILD_TAG_FILE))
+    if build and not (source_built and not update):
+        return build_llamacpp(bin_dir, backend, log)
     if existing and update:
         have = installed_build(bin_dir)
         newest, _assets = latest_build(backend, cuda_driver)
@@ -163,22 +334,40 @@ def ensure_llamacpp(bin_dir, backend, log, progress, cuda_driver=None, update=Fa
     bin_archive = dl(assets["binary"], "llama.cpp binary")
     download.extract_archive(bin_archive, target)
     os.remove(bin_archive)
-    if assets["cudart"]:
-        cudart_archive = dl(assets["cudart"], "CUDA runtime")
-        download.extract_archive(cudart_archive, target)
-        os.remove(cudart_archive)
-    if not server.find_server_binary(target):
+    found = server.find_server_binary(target)
+    if not found:
         die(f"llama-server not found after extracting the {assets['tag']} release")
-    if existing:
-        old = bin_dir + ".old"
-        shutil.rmtree(old, ignore_errors=True)
-        os.replace(bin_dir, old)
-        os.replace(target, bin_dir)
-        shutil.rmtree(old, ignore_errors=True)
-    found = server.find_server_binary(bin_dir)
-    log(f"Installed llama.cpp {assets['tag']} ({assets['binary']['name']}) -> "
-        f"{os.path.dirname(found)}")
-    return os.path.dirname(found)
+    if assets["cudart"]:
+        # The CUDA runtime archive unpacks into its own folder on Linux; the
+        # libraries must sit next to llama-server or the GPU isn't found.
+        cudart_archive = dl(assets["cudart"], "CUDA runtime")
+        staging = os.path.join(target, "_cudart")
+        download.extract_archive(cudart_archive, staging)
+        os.remove(cudart_archive)
+        srv_dir = os.path.dirname(found)
+        for dirpath, _dirs, files in os.walk(staging):
+            for name in files:
+                dest = os.path.join(srv_dir, name)
+                if os.path.lexists(dest):
+                    os.remove(dest)
+                shutil.move(os.path.join(dirpath, name), dest)
+        shutil.rmtree(staging, ignore_errors=True)
+    ok, detail = server_runs(target)
+    if not ok:
+        shutil.rmtree(target, ignore_errors=True)
+        if platform.system() != "Windows":
+            log(f"  the prebuilt llama.cpp can't run on this system:\n    {detail[-300:]}")
+            if not build_tools_missing(backend):
+                log("  (prebuilt Linux builds need glibc 2.38+, i.e. Ubuntu 24.04 or newer) "
+                    "- building from source instead")
+                return build_llamacpp(bin_dir, backend, log, tag=assets["tag"])
+            die("The prebuilt llama.cpp needs glibc 2.38+ (Ubuntu 24.04, Debian 13, Fedora 39 "
+                "or newer). Upgrade, or install the build tools and re-run with "
+                "--build-llamacpp. " + BUILD_HELP)
+        die(f"The downloaded llama-server doesn't start: {detail}")
+    resolved = _swap_in(target, bin_dir, existing)
+    log(f"Installed llama.cpp {assets['tag']} ({assets['binary']['name']}) -> {resolved}")
+    return resolved
 
 
 def ensure_model(model, quant, model_path, log, progress):
@@ -231,18 +420,14 @@ def run_pipeline_llamacpp(model, quant, profile, hw, skip_tests=False, port=8080
                           model_path=None, install_node=False, stop_when_done=False,
                           backend=None, extra_server_args=None, thinking=None,
                           think_budget=None, update_llamacpp=False, allow_ps_scripts=None,
-                          log=print, progress=lambda *a: None):
+                          build_llamacpp_src=False, log=print, progress=lambda *a: None):
     """The GGUF/llama.cpp install pipeline (Windows/Linux), shared by the
     wizard, flags and GUI front-ends. See run_pipeline_mlx for macOS."""
     report = {}
     extra_server_args = list(extra_server_args or [])
 
     backend = backend or hwdetect.pick_llamacpp_backend(hw)
-    if platform.system() == "Linux" and backend == "cuda":
-        if not bin_dir or not os.path.isdir(bin_dir) or not server.find_server_binary(bin_dir):
-            die("Linux CUDA requires a source-built llama-server because official llama.cpp "
-                "releases do not provide a Linux CUDA binary. Pass both --backend cuda and "
-                "--bin-dir /path/to/build/bin; see docs/DEPLOY.md.")
+    custom_bin = bool(bin_dir)
     bin_dir = bin_dir or os.path.join(ROOT, "llama.cpp")
     report["Backend"] = backend
     report["Hardware"] = "; ".join(hw.summary_lines())
@@ -251,7 +436,15 @@ def run_pipeline_llamacpp(model, quant, profile, hw, skip_tests=False, port=8080
     server.kill_existing_server(ROOT)
     resolved_bin_dir = ensure_llamacpp(bin_dir, backend, log, progress,
                                        cuda_driver=getattr(hw, "cuda_driver", None),
-                                       update=update_llamacpp)
+                                       update=update_llamacpp and not custom_bin,
+                                       build=build_llamacpp_src and not custom_bin)
+    if backend in ("cuda", "vulkan", "rocm"):
+        devices = gpu_devices(resolved_bin_dir)
+        if devices:
+            log("  GPU: " + "; ".join(devices))
+        else:
+            log(f"  WARNING: llama.cpp ({backend}) sees no GPU, so it will run on the CPU "
+                "(slow). Check the NVIDIA/AMD driver, or try --backend vulkan.")
 
     log("=== 2/6 Model weights ===")
     resolved_model_path = ensure_model(model, quant, model_path, log, progress)
@@ -281,6 +474,9 @@ def run_pipeline_llamacpp(model, quant, profile, hw, skip_tests=False, port=8080
     s["sleep_supported"] = settings.binary_supports(
         os.path.join(resolved_bin_dir, server.server_exe_name()), "--sleep-idle-seconds")
     settings.save(ROOT, s)
+    if backend != "cpu":
+        s["fit_target_runtime"] = server.fit_target_for(
+            os.path.join(resolved_bin_dir, server.server_exe_name()), s["fit_margin_mib"])
     args = settings.server_args(s, ROOT)
     log(f"  llama-server {' '.join(args)}")
     proc = server.start_server(os.path.join(resolved_bin_dir, server.server_exe_name()), args,
@@ -350,46 +546,26 @@ def _memory_plan(model, quant, profile, hw, log):
             "Choose a smaller context or quant.")
 
 
-def _mlx_memory_preflight(model, quant, log):
-    """Verify there's enough free unified memory to actually start the server,
-    measured *now* (after killing any prior server) rather than from detect()'s
-    startup snapshot.
+def _mlx_memory_preflight(model, quant, hw, log):
+    """Say what the model needs against the Mac's TOTAL unified memory.
 
-    rapid-mlx admits a request only while active weights + projected KV stay
-    under ~0.90 * the Metal working set, so a machine that's low on free memory
-    doesn't hang - it loads and then 503s the first real request. Catching that
-    here turns a confusing mid-validation failure into an upfront, actionable
-    message. This warns (and, when clearly too low, aborts) but never silently
-    proceeds into a run that can't succeed."""
-    free = hwdetect.macos_available_ram_gb()
+    Free memory is not checked: macOS keeps lots of RAM as file cache and
+    compressed memory that it gives back when the model loads, so a "free"
+    figure says little and made installs fail on Macs that run the model
+    fine. Only a model larger than the Mac's usable total gets a warning."""
     weights = quant["size_gb"]
     need = catalog.estimate_mlx_requirements(model, quant)
-    if free is None:
-        log(f"  [preflight] couldn't read free memory; need ~{need:.1f} GB "
-            f"(weights {weights:.1f} GB + KV/activations headroom). Continuing.")
-        return
-    log(f"  [preflight] free unified memory ~{free:.1f} GB; this model wants "
-        f"~{need:.1f} GB (weights {weights:.1f} GB + KV/activations headroom).")
-    # Hard floor: without room for the weights plus a minimal working margin the
-    # server cannot even load without heavy paging, and every request will 503.
-    hard_floor = weights + 1.5
-    if free < hard_floor:
-        die(f"Not enough free memory to start: ~{free:.1f} GB free, but "
-            f"{quant['repo']} needs at least ~{hard_floor:.1f} GB just to load "
-            f"its weights. Close other apps (a browser or another model server "
-            f"is the usual culprit), or re-run with a smaller model/quant "
-            f"(`python install.py --list-models`). Free memory is measured live, "
-            f"so freeing some and re-running is enough - the installer is idempotent.")
-    if free < need:
-        log(f"  [preflight] WARNING: only ~{free:.1f} GB free vs ~{need:.1f} GB "
-            f"wanted. Small requests will work, but long prompts or large "
-            f"max_tokens may come back as HTTP 503 (KV cache would exceed the "
-            f"Metal cap). Close some apps or pick a smaller quant for headroom.")
+    total = hw.ram_total_gb
+    log(f"  memory plan: this model wants ~{need:.1f} GB (weights {weights:.1f} GB + "
+        f"context); this Mac has {f'{total:.0f} GB' if total else 'unknown memory'} in total.")
+    if total and catalog.mlx_fit_verdict(model, quant, total, None, None) == "no":
+        log("  WARNING: that is more than macOS lets the GPU use on this Mac; long prompts "
+            "may fail with HTTP 503. Pick a smaller model or quant.")
 
 
 def run_pipeline_mlx(model, quant, hw, skip_tests=False, port=8000, install_node=False,
-                      stop_when_done=False, log=print,
-                      progress=lambda *a: None):
+                      stop_when_done=False, thinking=None, think_budget=None, ctx_explicit=None,
+                      log=print, progress=lambda *a: None):
     """The rapid-mlx install pipeline (macOS/Apple Silicon only). Unlike
     llama.cpp, rapid-mlx manages its own weight download (see
     installer/rapidmlx_setup.py), so there's no ensure_llamacpp/ensure_model
@@ -404,12 +580,33 @@ def run_pipeline_mlx(model, quant, hw, skip_tests=False, port=8000, install_node
 
     log("=== 2/5 Starting rapid-mlx server ===")
     rapidmlx_setup.kill_existing(ROOT)
-    _mlx_memory_preflight(model, quant, log)
-    args = rapidmlx_setup.build_serve_args(quant["repo"], port)
+    server.kill_existing_server(ROOT)
+    _mlx_memory_preflight(model, quant, hw, log)
+    old = settings.load(ROOT) or {}
+    ctx = ctx_explicit or catalog.ctx_sizes(model)["primary"]
+    s = dict(settings.DEFAULTS)
+    s.update({
+        "engine": "rapidmlx",
+        "model_id": quant["repo"],      # rapid-mlx serves the repo id
+        "display_name": model["display_name"],
+        "repo": quant["repo"],
+        "arch": model["arch"],
+        "reasoning": bool(model.get("reasoning", True)),
+        "port": port,
+        "ctx": ctx,
+        "ctx_explicit": ctx_explicit,
+        "thinking": thinking or old.get("thinking") or settings.DEFAULTS["thinking"],
+        "think_budget": think_budget or old.get("think_budget") or
+        settings.DEFAULTS["think_budget"],
+        "idle_minutes": old.get("idle_minutes", settings.DEFAULTS["idle_minutes"]),
+    })
+    args = settings.server_args(s, ROOT)
     log(f"  rapid-mlx {' '.join(args)}  (first run downloads the model from Hugging Face)")
     proc = rapidmlx_setup.start_rapidmlx(exe, args, os.path.join(ROOT, "server.log"),
                                           os.path.join(ROOT, "server.err"))
     rapidmlx_setup.write_pid(ROOT, proc.pid)
+    with open(os.path.join(ROOT, ".server-state.json"), "w", encoding="utf-8") as f:
+        json.dump({"pid": proc.pid, "args": args}, f)
     log("  waiting for the server to come up (this includes the model download - can take a while) ...")
     if not server.wait_for_health(port, timeout_s=1800, path="/v1/models", process=proc):
         die("Server did not become healthy (or exited during startup) - see server.log / server.err")
@@ -418,24 +615,21 @@ def run_pipeline_mlx(model, quant, hw, skip_tests=False, port=8000, install_node
     except Exception as e:
         die(f"Server is up but /v1/models didn't return a usable response: {e}")
     if alias != quant["repo"]:
-        log(f"  [WARN] /v1/models reports '{alias}', expected '{quant['repo']}' - rapid-mlx's "
-            f"exact model-id echoing wasn't verified against real hardware for this installer "
-            f"(see installer/rapidmlx_setup.py); continuing with the reported id.")
+        log(f"  [WARN] /v1/models reports '{alias}', expected '{quant['repo']}'; "
+            f"continuing with the reported id.")
         alias = alias or quant["repo"]
+    s["model_id"] = alias
+    settings.save(ROOT, s)
     log(f"  healthy, alias={alias}, pid={proc.pid}")
-    # rapid-mlx's CLI surface (as documented) has no --ctx-size equivalent - reuse this
-    # model's GGUF "primary" context as a reasonable opencode.json default; adjust by hand
-    # if rapid-mlx's actual max context for this model differs.
-    ctx = catalog.ctx_sizes(model)["primary"]
     report["Model"] = f"{model['display_name']} / {quant['label']} ({quant['repo']})"
-    report["Server"] = f"port {port}, ctx {ctx} (assumed)"
+    report["Server"] = settings.describe(s)
 
-    log("=== 3/5 Writing config + run script ===")
+    log("=== 3/5 Writing config + start command ===")
     opencode_json = os.path.join(ROOT, "opencode.json")
     server.write_opencode_json(opencode_json, model, port, ctx, provider_key="rapidmlx",
                                 provider_label="rapid-mlx (local)", served_model_id=alias)
-    rapidmlx_setup.write_run_script(ROOT, quant["repo"], port)
-    log("  opencode.json, run.sh written")
+    server.write_run_scripts(ROOT, sys.executable)
+    log("  settings.json, opencode.json, run.sh written")
 
     log("=== 4/5 Validation ===")
     test_results = {}
@@ -455,7 +649,10 @@ def run_pipeline_mlx(model, quant, hw, skip_tests=False, port=8000, install_node
         rapidmlx_setup.kill_existing(ROOT)
     else:
         log(f"Server left running on http://127.0.0.1:{port}/v1 (pid {proc.pid})")
-
+    log("")
+    log("Done. To code: open a terminal in your project folder and run   opencode-local")
+    log("  thinking off for one session:  opencode-local --think off")
+    log("  stop the model server:         opencode-local --stop")
     return {"report": report, "tests": test_results}
 
 
@@ -505,8 +702,7 @@ def _setup_opencode(model_id, port, install_node, log, provider_key="llamacpp",
     if not opencode_setup.ensure_opencode_on_path(log):
         results["opencode-agentic"] = "FAIL"
         return results
-    if provider_key == "llamacpp":
-        opencode_setup.install_launcher(ROOT, sys.executable, log)
+    opencode_setup.install_launcher(ROOT, sys.executable, log)
     if opencode_setup.powershell_scripts_blocked():
         if allow_ps_scripts:
             opencode_setup.allow_powershell_scripts(log)
@@ -562,6 +758,11 @@ def parse_args():
     p.add_argument("--update-llamacpp", action="store_true",
                    help="replace an existing llama.cpp folder with the newest build "
                         "(skipped when it is already the newest)")
+    p.add_argument("--build-llamacpp", action="store_true",
+                   help="Linux/macOS: compile llama.cpp from source (with CUDA on NVIDIA) "
+                        "instead of downloading the prebuilt; needs git, cmake, a C++ "
+                        "compiler and the CUDA toolkit. Used automatically when the prebuilt "
+                        "can't run (glibc older than 2.38)")
     p.add_argument("--allow-ps-scripts", action="store_true",
                    help="Windows: let PowerShell run local scripts for this user "
                         "(RemoteSigned) so a plain `opencode` works")
@@ -671,6 +872,9 @@ def main():
         from installer import cli
         if engine == "rapidmlx":
             model, quant = cli.choose_mlx_model_quant(hw)
+            args.think = args.think or cli._choose_thinking()
+            if not cli.confirm("Install now?"):
+                raise SystemExit("Cancelled.")
         else:
             bin_dir = args.bin_dir or os.path.join(ROOT, "llama.cpp")
             update_info = None
@@ -681,8 +885,14 @@ def main():
                                                getattr(hw, "cuda_driver", None))
                 if newest and newest > have:
                     update_info = (have, newest)
+            linux_cuda = None
+            if (platform.system() == "Linux" and hw.gpu_vendor == "nvidia"
+                    and args.backend in ("auto", "cuda") and not args.bin_dir):
+                linux_cuda = not build_tools_missing("cuda")
             choice = cli.run_wizard(hw, update_info=update_info,
-                                    scripts_blocked=opencode_setup.powershell_scripts_blocked())
+                                    scripts_blocked=opencode_setup.powershell_scripts_blocked(),
+                                    linux_cuda=linux_cuda)
+            args.build_llamacpp = args.build_llamacpp or choice["build_llamacpp"]
             model, quant = choice["model"], choice["quant"]
             args.ctx = args.ctx or choice["ctx"]
             args.think = args.think or choice["thinking"]
@@ -733,6 +943,12 @@ class _Tee:
 
     def write(self, data):
         self.stream.write(data)
+        # Progress updates redraw one console line ("\r..."); the log keeps
+        # only the final one, which ends with a newline.
+        if data.startswith("\r"):
+            if not data.endswith("\n"):
+                return
+            data = data.lstrip("\r")
         self.file.write(data)
         self.file.flush()
 
@@ -766,7 +982,9 @@ def _dispatch(model, quant, profile, hw, engine, port, args, skip_tests, log, pr
                 "not the macOS Rapid-MLX engine.")
         run_pipeline_mlx(model, quant, hw, skip_tests=skip_tests, port=port,
                           install_node=args.install_node, stop_when_done=args.stop_when_done,
-                          log=log, progress=progress)
+                          thinking=getattr(args, "think", None),
+                          think_budget=getattr(args, "think_budget", None),
+                          ctx_explicit=args.ctx, log=log, progress=progress)
     else:
         selected_backend = (None if args.backend == "auto" else args.backend)
         run_pipeline_llamacpp(model, quant, profile, hw, skip_tests=skip_tests, port=port,
@@ -777,6 +995,7 @@ def _dispatch(model, quant, profile, hw, engine, port, args, skip_tests, log, pr
                               think_budget=getattr(args, "think_budget", None),
                               update_llamacpp=getattr(args, "update_llamacpp", False),
                               allow_ps_scripts=getattr(args, "allow_ps_scripts", None),
+                              build_llamacpp_src=getattr(args, "build_llamacpp", False),
                               log=log, progress=progress)
 
 

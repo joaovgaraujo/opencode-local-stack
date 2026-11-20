@@ -41,7 +41,33 @@ Node.js and OpenCode, runs the tests, and installs the `opencode-local`
 command. Re-running it is safe; it reuses what is already downloaded and
 offers to update an older llama.cpp.
 
-Linux and macOS: `python3 install.py` runs the same wizard.
+## Install (Linux and macOS)
+
+```
+curl -fsSL https://github.com/joaovgaraujo/opencode-local-stack/releases/latest/download/opencode-local-installer.sh | bash
+```
+
+That downloads the latest release into `~/opencode-local` (set `OCL_DEST` to
+change it) and runs `setup.sh`, the same wizard as on Windows. With git:
+`git clone` the repo and run `./setup.sh`. Nothing uses sudo: llama.cpp, Node.js
+and the model go into the install folder, OpenCode and `opencode-local` into
+`~/.local`. If `~/.local/bin` isn't on your PATH, the installer adds it to
+`~/.profile` (Linux) or `~/.zprofile` (macOS); open a new terminal afterwards.
+
+**Linux with an NVIDIA GPU** gets llama.cpp's prebuilt CUDA build, matched to
+the CUDA version your driver supports. Those builds need glibc 2.38 or newer
+(Ubuntu 24.04, Debian 13, Fedora 39 or later). On older systems, or when you
+pick it in the wizard (`--build-llamacpp`), the installer compiles llama.cpp
+with CUDA from source instead: 5 to 20 minutes, and it needs git, cmake, a C++
+compiler and the CUDA toolkit (`nvcc`). AMD uses ROCm, other GPUs Vulkan.
+
+**macOS on Apple Silicon** runs MLX models with rapid-mlx 1.0.5. It needs
+Python 3.12 or 3.13: the installer uses one if the Mac has it (Homebrew or
+python.org), and otherwise downloads `uv` into the install folder to get a
+private Python 3.12, with no Homebrew or admin rights needed. Node.js comes
+from Homebrew when present, else from nodejs.org. Thinking off/limited/on and
+the idle unload work the same way; Hugging Face GGUF links are llama.cpp-only
+and not offered on a Mac.
 
 ## Use it
 
@@ -140,8 +166,8 @@ python install.py --skip-tests
 ```
 
 Node.js is required for OpenCode and is installed only with `--install-node`
-(`setup.cmd` passes it): winget on Windows, Homebrew on macOS, and the
-official nodejs.org tarball in `./node` on Linux.
+(`setup.cmd` and `setup.sh` pass it): winget on Windows, Homebrew or the
+nodejs.org download on macOS, and the nodejs.org tarball in `./node` on Linux.
 
 ## Pick a model
 
@@ -204,9 +230,9 @@ fit, and CUDA-vs-Vulkan speed for the original six models on one machine:
 - OpenCode reads its settings from `%USERPROFILE%\.config\opencode\opencode.json`
   (`~/.config/opencode` on Linux). The installer adds its provider to that file
   and keeps anything else you configured there.
-- Linux with NVIDIA defaults to the official Vulkan prebuilt. For a CUDA build
-  you compiled yourself, pass `--backend cuda --bin-dir <build/bin>` (see
-  [`docs/DEPLOY.md`](docs/DEPLOY.md#linux--nvidia-vulkan-vs-building-cuda-from-source)).
+- To use a llama.cpp you built yourself, pass `--bin-dir <folder with llama-server>`
+  (and `--backend cuda|vulkan|rocm|cpu` to say which). `--backend vulkan` also
+  works on NVIDIA if the CUDA build gives you trouble.
 
 ## Repo layout
 

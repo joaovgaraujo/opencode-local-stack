@@ -82,21 +82,41 @@ def install_node_macos():
 NODE_VERSION = "26.13.1"  # current LTS (Lithium)
 
 _LINUX_NODE_ARCHES = {"x86_64": "x64", "amd64": "x64", "aarch64": "arm64", "arm64": "arm64"}
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def local_node_bins():
+    """bin folders of a Node the installer unpacked into <repo>/node."""
+    import glob
+    return sorted(glob.glob(os.path.join(ROOT, "node", "node-v*", "bin")), reverse=True)
+
+
+def add_local_tools_to_path():
+    """Linux/macOS: make the installer's own Node and ~/.local/bin (where npm
+    puts OpenCode for a system Node) visible to this process and its children;
+    OpenCode's launcher needs `node` on PATH."""
+    if platform.system() == "Windows":
+        return
+    extra = local_node_bins() + [os.path.join(os.path.expanduser("~"), ".local", "bin")]
+    parts = os.environ.get("PATH", "").split(os.pathsep)
+    os.environ["PATH"] = os.pathsep.join([d for d in extra if d not in parts] + parts)
 
 
 def install_node_linux(log):
-    """Download the official nodejs.org Linux tarball into <repo>/node and put
-    its bin/ on this process's PATH. Project-local and sudo-free, like the
-    llama.cpp prebuilt download; the system is never modified."""
+    """Download the official nodejs.org tarball (Linux or macOS) into
+    <repo>/node and put its bin/ on this process's PATH. Project-local and
+    sudo-free, like the llama.cpp prebuilt download; the system is never
+    modified."""
     from . import download
 
     arch = _LINUX_NODE_ARCHES.get(platform.machine().lower())
     if not arch:
         log(f"No official Node build for architecture {platform.machine()!r}.")
         return None
-    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    root = ROOT
     node_dir = os.path.join(root, "node")
-    dist = f"node-v{NODE_VERSION}-linux-{arch}"
+    os_tag = "darwin" if platform.system() == "Darwin" else "linux"
+    dist = f"node-v{NODE_VERSION}-{os_tag}-{arch}"
     bin_dir = os.path.join(node_dir, dist, "bin")
     if not os.path.exists(os.path.join(bin_dir, "node")):
         url = f"https://nodejs.org/dist/v{NODE_VERSION}/{dist}.tar.gz"
@@ -132,10 +152,10 @@ def try_install_node(log):
     if system == "Darwin":
         if shutil.which("brew"):
             log("Installing Node via Homebrew (brew install node) ...")
-            return install_node_macos()
-        log("Homebrew not found - cannot auto-install Node. "
-            "Install Homebrew (https://brew.sh) or Node directly.")
-        return None
+            node = install_node_macos()
+            if node:
+                return node
+        return install_node_linux(log)   # nodejs.org macOS tarball, no Homebrew needed
     if system == "Linux":
         return install_node_linux(log)
     return None
@@ -145,12 +165,28 @@ OPENCODE_VERSION = "1.19.6"
 OPENAI_COMPAT_VERSION = "3.0.93"
 
 
+def _npm_prefix_writable():
+    """False when `npm install -g` would need sudo (a system Node from apt or
+    a distro package installs globals under /usr)."""
+    if platform.system() == "Windows":
+        return True
+    bin_dir = npm_global_bin()
+    if not bin_dir:
+        return True
+    prefix = os.path.dirname(bin_dir)
+    return os.access(prefix, os.W_OK) and os.access(os.path.join(prefix, "lib"), os.W_OK)
+
+
 def npm_install_opencode(log):
-    r = subprocess.run(
-        ["npm", "install", "-g", f"opencode-ai@{OPENCODE_VERSION}",
-         f"@ai-sdk/openai-compatible@{OPENAI_COMPAT_VERSION}"],
-                        capture_output=True, text=True, encoding="utf-8", errors="replace",
-                        shell=(platform.system() == "Windows"))
+    cmd = ["npm", "install", "-g", f"opencode-ai@{OPENCODE_VERSION}",
+           f"@ai-sdk/openai-compatible@{OPENAI_COMPAT_VERSION}"]
+    if not _npm_prefix_writable():
+        # No sudo: install into ~/.local (opencode lands in ~/.local/bin)
+        user_prefix = os.path.join(os.path.expanduser("~"), ".local")
+        log(f"  npm's global folder needs root; installing OpenCode into {user_prefix}")
+        cmd += ["--prefix", user_prefix]
+    r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                       shell=(platform.system() == "Windows"))
     tail = (r.stdout or "").strip().splitlines()[-3:]
     if tail:
         log("\n".join(tail))
@@ -257,6 +293,7 @@ def find_opencode():
             cand = os.path.join(bin_dir, "opencode.cmd") if bin_dir else None
             exe = cand if cand and os.path.exists(cand) else None
         return exe
+    add_local_tools_to_path()
     exe = shutil.which("opencode")
     if not exe:
         bin_dir = npm_global_bin()
@@ -292,6 +329,27 @@ def allow_powershell_scripts(log):
     return ok
 
 
+def _ensure_local_bin_on_path(log):
+    """~/.local/bin holds opencode-local (and OpenCode for a system Node).
+    Ubuntu's ~/.profile adds it at login; macOS's zsh doesn't. Add one guarded
+    line to the login profile when it is missing, so a new terminal finds it."""
+    local_bin = os.path.join(os.path.expanduser("~"), ".local", "bin")
+    if local_bin in os.environ.get("PATH", "").split(os.pathsep):
+        return
+    profile = os.path.join(os.path.expanduser("~"),
+                           ".zprofile" if platform.system() == "Darwin" else ".profile")
+    line = 'export PATH="$HOME/.local/bin:$PATH"  # added by opencode-local-stack'
+    try:
+        existing = open(profile, encoding="utf-8").read() if os.path.exists(profile) else ""
+        if ".local/bin" in existing:
+            return
+        with open(profile, "a", encoding="utf-8") as f:
+            f.write(("\n" if existing and not existing.endswith("\n") else "") + line + "\n")
+        log(f"  added ~/.local/bin to PATH in {profile} (open a new terminal to use it)")
+    except OSError as e:
+        log(f"  add ~/.local/bin to your PATH to use opencode-local ({e})")
+
+
 def install_launcher(root, python_exe, log):
     """Install the `opencode-local` command so it works from any folder.
 
@@ -316,6 +374,7 @@ def install_launcher(root, python_exe, log):
         body = f'#!/usr/bin/env sh\nexec "{python_exe}" "{start_py}" "$@"\n'
         targets = [os.path.join(os.path.expanduser("~"), ".local", "bin")]
         name = "opencode-local"
+        _ensure_local_bin_on_path(log)
     with open(os.path.join(root, name), "w", encoding="utf-8", newline="") as f:
         f.write(body)
     if not windows:

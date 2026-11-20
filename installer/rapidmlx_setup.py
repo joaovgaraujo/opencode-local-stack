@@ -30,8 +30,17 @@ import sys
 import time
 
 
-RAPIDMLX_VERSION = "0.10.15"
+RAPIDMLX_VERSION = "1.0.5"
+PYTHON_VERSION = (3, 12)   # rapid-mlx 1.x requires Python >= 3.12
+# Newest Python known to have wheels for all of rapid-mlx's dependencies. On
+# Python 3.15 (Homebrew, 2026-11) tiktoken has no wheel and fails to build.
+PYTHON_MAX = (3, 13)
+
+
+def _python_ok(version):
+    return PYTHON_VERSION <= tuple(version) <= PYTHON_MAX
 VENV_DIR_NAME = ".rapidmlx-venv"
+UV_DIR_NAME = ".uv"
 PID_FILE_NAME = ".rapidmlx.pid"
 PFLASH_MODES = {"off", "auto", "always"}
 
@@ -114,19 +123,38 @@ def ensure_rapidmlx(root, log):
 
     venv_dir = os.path.join(root, VENV_DIR_NAME)
     venv_python = os.path.join(venv_dir, "bin", "python")
+    if os.path.isfile(venv_python) and not _python_ok(_python_version(venv_python)):
+        log(f"{VENV_DIR_NAME} uses a Python outside 3.12-3.13 (rapid-mlx and its "
+            "dependencies need that range); recreating it ...")
+        shutil.rmtree(venv_dir, ignore_errors=True)
+    uv = None
     if not os.path.isfile(venv_python):
-        log(f"Creating {VENV_DIR_NAME} for rapid-mlx ...")
-        created = subprocess.run([sys.executable, "-m", "venv", venv_dir],
-                                 capture_output=True, text=True, encoding="utf-8",
-                                 errors="replace")
+        py = _find_python()
+        if py:
+            log(f"Creating {VENV_DIR_NAME} with {py} ...")
+            created = subprocess.run([py, "-m", "venv", venv_dir], capture_output=True,
+                                     text=True, encoding="utf-8", errors="replace")
+        else:
+            # macOS ships Python 3.9; get a private 3.12 via uv instead of
+            # asking for Homebrew or an admin install.
+            uv = _ensure_uv(root, log)
+            if not uv:
+                return None
+            log("Creating the rapid-mlx environment with uv's Python 3.12 (downloads ~30 MB) ...")
+            created = subprocess.run([uv, "venv", "--python", "3.12", venv_dir],
+                                     capture_output=True, text=True, encoding="utf-8",
+                                     errors="replace")
         if created.returncode != 0:
             log((created.stderr or created.stdout or "venv creation failed").strip()[-2000:])
             return None
 
     log(f"Installing rapid-mlx=={RAPIDMLX_VERSION} in {VENV_DIR_NAME} ...")
-    r = subprocess.run([venv_python, "-m", "pip", "install",
-                        f"rapid-mlx=={RAPIDMLX_VERSION}"],
-                       capture_output=True, text=True, encoding="utf-8", errors="replace")
+    uv = uv or _local_uv(root)
+    if uv:
+        cmd = [uv, "pip", "install", "--python", venv_python, f"rapid-mlx=={RAPIDMLX_VERSION}"]
+    else:
+        cmd = [venv_python, "-m", "pip", "install", f"rapid-mlx=={RAPIDMLX_VERSION}"]
+    r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
     tail = (r.stdout or "").strip().splitlines()[-5:]
     if tail:
         log("\n".join(tail))
@@ -136,7 +164,76 @@ def ensure_rapidmlx(root, log):
     return find_rapidmlx(root)
 
 
-def build_serve_args(repo_id, port, pflash="off"):
+def _python_version(exe):
+    try:
+        out = subprocess.run([exe, "-c", "import sys; print(sys.version_info[0], "
+                              "sys.version_info[1])"], capture_output=True, text=True,
+                             timeout=30).stdout.split()
+        return int(out[0]), int(out[1])
+    except (OSError, subprocess.SubprocessError, ValueError, IndexError):
+        return (0, 0)
+
+
+def _find_python():
+    """A Python 3.12-3.13 already on this Mac (Homebrew, python.org), or None;
+    then uv provides one."""
+    cands = [shutil.which(n) for n in ("python3.13", "python3.12")]
+    cands += ["/opt/homebrew/bin/python3.13", "/opt/homebrew/bin/python3.12"]
+    cands += ["/opt/homebrew/bin/python3", "/usr/local/bin/python3",
+              "/Library/Frameworks/Python.framework/Versions/Current/bin/python3", sys.executable]
+    for c in cands:
+        if c and os.path.exists(c) and _python_ok(_python_version(c)):
+            return c
+    return None
+
+
+def _local_uv(root):
+    for dirpath, _dirs, files in os.walk(os.path.join(root, UV_DIR_NAME)):
+        if "uv" in files:
+            return os.path.join(dirpath, "uv")
+    return shutil.which("uv")
+
+
+def _ensure_uv(root, log):
+    """uv (astral-sh/uv), unpacked into <repo>/.uv: no admin rights needed.
+    It installs a private Python 3.12 for rapid-mlx."""
+    found = _local_uv(root)
+    if found:
+        return found
+    import tarfile
+    from . import download
+    arch = "aarch64" if platform.machine() == "arm64" else "x86_64"
+    name = f"uv-{arch}-apple-darwin.tar.gz"
+    dest = os.path.join(root, UV_DIR_NAME)
+    os.makedirs(dest, exist_ok=True)
+    archive = os.path.join(dest, name)
+    log("Downloading uv (to install Python 3.12 for rapid-mlx) ...")
+    try:
+        download.download_with_retries(
+            f"https://github.com/astral-sh/uv/releases/latest/download/{name}", archive)
+        download.extract_archive(archive, dest)
+    except (OSError, RuntimeError, tarfile.TarError) as e:
+        log(f"  could not get uv: {e}. Install Python 3.12+ (https://www.python.org/downloads/) "
+            "and re-run.")
+        return None
+    finally:
+        if os.path.exists(archive):
+            os.remove(archive)
+    return _local_uv(root)
+
+
+def effort_for(thinking, budget):
+    """rapid-mlx has no token-budget flag; --default-reasoning-effort maps to
+    a thinking-token cap for templates without native levels."""
+    if thinking == "off":
+        return "none"
+    if thinking == "limited":
+        return "low" if budget <= 1024 else "medium" if budget <= 4096 else "high"
+    return None
+
+
+def build_serve_args(repo_id, port, pflash="off", thinking="on", think_budget=4096,
+                     idle_minutes=0, ctx=None):
     # The catalog deliberately contains text models only. Rapid-MLX's
     # filename heuristic can mistake Qwen3.5 text checkpoints for MLLMs.
     #
@@ -149,15 +246,29 @@ def build_serve_args(repo_id, port, pflash="off"):
     # long-prompt prefill compression PFlash would add is not worth a crash.
     if pflash not in PFLASH_MODES:
         raise ValueError(f"Unsupported Rapid-MLX PFlash mode: {pflash}")
-    return ["--no-telemetry", "serve", repo_id, "--no-mllm",
+    args = ["--no-telemetry", "serve", repo_id, "--no-mllm",
             "--pflash", pflash,
             "--port", str(port), "--host", "127.0.0.1"]
+    effort = effort_for(thinking, think_budget)
+    if effort:
+        args += ["--default-reasoning-effort", effort]
+    if idle_minutes and idle_minutes > 0:
+        args += ["--idle-unload-seconds", str(int(idle_minutes) * 60)]
+    if ctx:
+        args += ["--context-length", str(int(ctx))]
+    return args
 
 
 def start_rapidmlx(exe, args, log_out_path, log_err_path):
     out_f = open(log_out_path, "wb")
     err_f = open(log_err_path, "wb")
-    return subprocess.Popen([exe] + args, stdout=out_f, stderr=err_f)
+    try:
+        # own session: keeps running after the terminal that started it closes
+        return subprocess.Popen([exe] + args, stdout=out_f, stderr=err_f,
+                                stdin=subprocess.DEVNULL, start_new_session=True)
+    finally:
+        out_f.close()
+        err_f.close()
 
 
 def _pid_path(root):

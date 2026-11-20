@@ -42,8 +42,8 @@ identical claims to be "Rapid-MLX": `raullenchai/Rapid-MLX` and
 own metadata (`https://pypi.org/pypi/rapid-mlx/json` - Homepage/Repository/
 Documentation) was checked directly: all three point at
 `raullenchai/Rapid-MLX`. That's the one this installer trusts and installs
-in a project-local `.rapidmlx-venv` (`rapid-mlx==0.10.15` from the normal
-PyPI channel). This works with Homebrew Python, which correctly rejects
+in a project-local `.rapidmlx-venv` (`rapid-mlx==1.0.5` from the normal
+PyPI channel, on Python 3.12 or 3.13; see Requirements). This works with Homebrew Python, which correctly rejects
 global `pip install` calls under PEP 668. It does **not** run the project's
 own `curl | bash` one-liner installer: piping a remote script into a shell, or trusting an
 unreviewed second implementation of the same project, isn't something this
@@ -159,9 +159,18 @@ catalogs together.
   llama.cpp path, which isn't wired up for Darwin yet (see above) - running
   `install.py` on an Intel Mac will currently stop with a clear error rather
   than silently doing the wrong thing.
-- Python 3.10+ (`rapid-mlx` requires it; macOS ships an older Python 3, so
-  install a newer one first if needed - `brew install python@3.12` or
-  python.org).
-- Node.js for OpenCode - not installed silently on macOS either;
-  `install.py` prints `brew install node` (or nvm) and stops if it's
-  missing, same as Linux.
+- Python 3.12 or 3.13 for rapid-mlx 1.0.5. The installer uses one the Mac
+  already has (Homebrew or python.org). Otherwise it downloads `uv` into the
+  install folder and lets it install a private Python 3.12, with no admin
+  rights. Python 3.15 is skipped: some of rapid-mlx's dependencies (tiktoken)
+  have no build for it yet. `setup.sh` itself runs on the Python 3.9 macOS
+  ships.
+- Node.js for OpenCode: with `--install-node` (`setup.sh` passes it) it comes
+  from Homebrew when present, otherwise the official nodejs.org macOS
+  download goes into `./node`.
+
+Tested on a 16 GB Apple M4 (macOS 27) with rapid-mlx 1.0.5 and
+mlx-community/Qwen3.5-9B-4bit: the four validation tests and the OpenCode
+agentic test pass, and `opencode-local --think off` switches rapid-mlx to
+`--default-reasoning-effort none`. The measurements below were taken with
+rapid-mlx 0.10.15.

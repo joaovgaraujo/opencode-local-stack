@@ -89,8 +89,28 @@ def thinking_args(mode, budget):
     return ["--reasoning", "on"]
 
 
+def comparable(args):
+    """Server args with run-time-measured values masked, for deciding whether
+    a running server matches the settings."""
+    out = list(args)
+    for i, a in enumerate(out[:-1]):
+        if a == "--fit-target":
+            out[i + 1] = "*"
+    return out
+
+
+def is_mlx(s):
+    return s.get("engine") == "rapidmlx"
+
+
 def server_args(s, root):
-    """llama-server arguments for settings dict s."""
+    """Server arguments for settings dict s: llama-server, or rapid-mlx on a
+    Mac (engine "rapidmlx")."""
+    if is_mlx(s):
+        from . import rapidmlx_setup
+        return rapidmlx_setup.build_serve_args(
+            s["repo"], s["port"], thinking=s["thinking"], think_budget=s["think_budget"],
+            idle_minutes=int(s.get("idle_minutes") or 0), ctx=s.get("ctx_explicit"))
     extra = list(s.get("extra_args") or [])
     backend = s["backend"]
     gpu = backend != "cpu"
@@ -110,7 +130,8 @@ def server_args(s, root):
         args += ["--parallel", "1"]
     if not user_sets(extra, PLACEMENT_FLAGS):
         if gpu:
-            args += ["--fit", "on", "--fit-target", str(s["fit_margin_mib"])]
+            args += ["--fit", "on", "--fit-target",
+                     str(s.get("fit_target_runtime") or s["fit_margin_mib"])]
         else:
             args += ["--n-gpu-layers", "0"]
     if gpu and not user_sets(extra, BATCH_FLAGS):

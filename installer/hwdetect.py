@@ -265,12 +265,11 @@ def pick_engine(hw):
 
 def pick_llamacpp_backend(hw):
     """Return one of 'cuda', 'vulkan', 'rocm', 'cpu' - the backend the
-    installer should fetch a prebuilt llama.cpp release for. Linux+NVIDIA
-    intentionally resolves to 'vulkan': llama.cpp does not publish a
-    prebuilt Linux CUDA binary (only Windows), and building CUDA from
-    source is not something this installer automates - see docs/DEPLOY.md."""
+    installer should fetch a prebuilt llama.cpp release for. NVIDIA gets
+    CUDA on Windows and Linux: llama.cpp publishes Linux CUDA builds since
+    2026-11 (glibc 2.38+; on older systems install.py builds from source)."""
     if hw.gpu_vendor == "nvidia":
-        return "cuda" if hw.os_name == "Windows" else "vulkan"
+        return "cuda"
     if hw.gpu_vendor == "amd":
         return "rocm"
     if hw.gpu_vendor == "other":

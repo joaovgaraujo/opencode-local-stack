@@ -112,32 +112,35 @@ guessing.
 | Windows | AMD | `rocm` (HIP) | prebuilt `win-hip-radeon-x64` release |
 | Windows | other/unknown | `vulkan` | prebuilt `win-vulkan-x64` release |
 | Windows | none detected | `cpu` | prebuilt `win-cpu-x64` release |
-| Linux | NVIDIA | `vulkan` | **llama.cpp does not publish a prebuilt Linux CUDA binary**; see below |
+| Linux | NVIDIA | `cuda` | prebuilt `ubuntu-cuda-12.8/13.5` release + CUDA runtime, matched to the driver; needs glibc 2.38+, else built from source (see below) |
 | Linux | AMD | `rocm` | prebuilt `ubuntu-rocm-7.2-x64` release |
 | Linux | other/unknown | `vulkan` | prebuilt `ubuntu-vulkan-x64` release |
 | Linux | none detected | `cpu` | prebuilt `ubuntu-x64` release |
 
-### Linux + NVIDIA: Vulkan vs building CUDA from source
+### Linux + NVIDIA: prebuilt CUDA or a source build
 
-llama.cpp's GitHub releases only ship a CUDA binary for Windows; Linux gets
-Vulkan, ROCm, or CPU prebuilts. Vulkan runs fine on NVIDIA cards and is what
-`install.py` uses by default: no build toolchain required. If you want CUDA
-performance on Linux, build it yourself (this installer intentionally does
-not automate this: it needs a matching CUDA Toolkit/driver/gcc combination
-that's too easy to get subtly wrong to script blindly):
+llama.cpp publishes Linux CUDA builds (x64 and arm64) for CUDA 12.8 and 13.5.
+The installer picks the newest one the driver supports (`nvidia-smi` reports
+it: a 13.4 driver gets the 12.8 build) and puts the CUDA runtime libraries
+next to `llama-server`. After unpacking it runs `llama-server --version` and
+`--list-devices`, so a build that can't run or can't see the GPU is caught
+before the model download.
+
+Those builds need glibc 2.38 or newer (Ubuntu 24.04, Debian 13, Fedora 39 or
+later). On an older system the prebuilt fails with `GLIBC_2.38 not found`, and
+the installer compiles llama.cpp with CUDA from source instead when git,
+cmake, a C++ compiler and the CUDA toolkit (`nvcc`, also looked up in
+`/usr/local/cuda*/bin`) are installed. Ask for that build directly with:
 ```bash
-git clone https://github.com/ggml-org/llama.cpp
-cmake -B build -DGGML_CUDA=ON -DCMAKE_BUILD_TYPE=Release
-cmake --build build --config Release -j
+./setup.sh --build-llamacpp                  # or: python3 install.py --build-llamacpp
 ```
-Then re-run with both the custom binary directory and its real backend:
-```bash
-python install.py --model qwen3.5-4b --non-interactive \
-    --backend cuda --bin-dir ./llama.cpp/build/bin
-```
-`--bin-dir` prevents a runtime download when it contains `llama-server`;
-`--backend cuda` ensures the report and generated launchers reflect the custom
-CUDA runtime rather than Linux's automatic Vulkan choice.
+It clones the matching llama.cpp release into `llama.cpp-src/`, builds only
+`llama-server` for this machine's GPU (`CMAKE_CUDA_ARCHITECTURES=native`) and
+copies it to `llama.cpp/`. Expect 5 to 20 minutes. Without the tools it stops
+with the apt command to install them.
+
+`--backend vulkan` uses the Vulkan prebuilt instead, and
+`--bin-dir <folder>` any llama-server you built yourself.
 
 ## Expert placement (MoE models)
 
