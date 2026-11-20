@@ -302,7 +302,13 @@ def install_launcher(root, python_exe, log):
     start_py = os.path.join(root, "start.py")
     windows = platform.system() == "Windows"
     if windows:
-        body = f'@echo off\r\n"{python_exe}" "{start_py}" %*\r\n'
+        # No setlocal on purpose: when this runs in a cmd window whose PATH
+        # predates the Node install (e.g. one opened by Windows Terminal), the
+        # npm folder is added to that window, so a plain `opencode` (such as
+        # the "opencode -s <session>" hint OpenCode prints) works there too.
+        body = ('@echo off\r\n'
+                'where opencode >nul 2>nul || set "PATH=%APPDATA%\\npm;%PATH%"\r\n'
+                f'"{python_exe}" "{start_py}" %*\r\n')
         targets = [npm_global_bin(),
                    os.path.join(os.environ.get("LOCALAPPDATA", ""), "Microsoft", "WindowsApps")]
         name = "opencode-local.cmd"

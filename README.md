@@ -62,6 +62,7 @@ opencode-local --think on                   unlimited thinking
 opencode-local --ctx 131072                 another context size
 opencode-local --think off --save           make it the default
 opencode-local --status                     what is running
+opencode-local -c                           continue the last OpenCode session
 opencode-local --stop                       stop the model server
 opencode-local run "fix the failing test"   arguments after the options go to OpenCode
 ```

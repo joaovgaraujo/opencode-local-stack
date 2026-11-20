@@ -180,8 +180,10 @@ def main():
         return 1
     sys.stdout.flush()
     rc = subprocess.call([exe] + passthrough)
-    print("OpenCode closed. The model server is still running (fast next start); "
-          "stop it with: opencode-local --stop")
+    print("OpenCode closed. The model server is still running (fast next start).\n"
+          "  continue the last session:  opencode-local -c\n"
+          "  continue a given session:   opencode-local -s <session id>\n"
+          "  stop the model server:      opencode-local --stop")
     return rc
 
 
