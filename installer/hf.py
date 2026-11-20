@@ -21,15 +21,6 @@ import urllib.request
 HF_API = "https://huggingface.co/api/models/{repo}"
 UA = {"User-Agent": "opencode-local-installer"}
 
-# Repos offered in the wizard. Both load in stock llama.cpp (GGUF arch
-# qwen35moe). Only the first was run through this project's tests.
-SUGGESTED = [
-    ("HauhauCS/Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive",
-     "Qwen3.6-35B-A3B uncensored (HauhauCS) - tested with this installer"),
-    ("mradermacher/Huihui-Qwen3.6-35B-A3B-abliterated-GGUF",
-     "Qwen3.6-35B-A3B abliterated (huihui-ai, GGUF by mradermacher) - not tested here"),
-]
-
 # GGUFs in a repo that are not standalone chat weights.
 _SKIP_FILE = re.compile(r"(mmproj|imatrix|dflash|draft|mtp[-_.]?head|patch)", re.I)
 _SPLIT = re.compile(r"-(\d+)-of-(\d+)\.gguf$", re.I)

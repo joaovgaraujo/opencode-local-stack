@@ -551,6 +551,23 @@ def default_ctx(model, hw):
     return choices[0]
 
 
+def recommended_model(hw):
+    """(model, quant) the wizard lists first and --model auto installs: the
+    largest catalog model whose default quant fits TOTAL memory at its default
+    context; catalog order breaks ties."""
+    order = {"fits": 0, "tight": 1, "no": 2}
+    rows = []
+    for i, model in enumerate(MODELS):
+        if not model.get("quants"):
+            continue
+        quant = default_quant(model)
+        ctx = default_ctx(model, hw)
+        verdict = hw_fit_verdict(with_ctx(model, ctx), quant, "primary", hw)
+        rows.append((order[verdict], -model["total_params_b"], i, model, quant))
+    rows.sort(key=lambda r: r[:3])
+    return rows[0][3], rows[0][4]
+
+
 def all_variants():
     """Flatten to (model, quant, profile) tuples for scoring against hardware."""
     out = []

@@ -52,3 +52,6 @@ settings.json
 /opencode-local
 llama.cpp.new/
 llama.cpp.old/
+
+# Built installer (Build-Installer.ps1)
+dist/

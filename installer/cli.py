@@ -51,35 +51,34 @@ def _choose_catalog(hw):
         rows.append((model, quant, ctx, _verdict(model, quant, ctx, hw)))
     order = {"fits": 0, "tight": 1, "no": 2}
     rows.sort(key=lambda r: (order[r[3]], -r[0]["total_params_b"]))
+    best, _q = catalog.recommended_model(hw)
+    rows.sort(key=lambda r: r[0] is not best)
     rows = [r for r in rows if r[3] != "no"][:8] or rows[:3]
     print("=== Step 1: model ===")
     for i, (m, q, _ctx, v) in enumerate(rows, 1):
         tag = "  <- recommended" if i == 1 else ""
         print(f"  [{i}] {m['display_name']:28} {q['size_gb']:5.1f} GB  {VERDICT_LABEL[v]}{tag}")
-    print("  [U] uncensored / abliterated, or any model from a Hugging Face link")
-    valid = {str(i) for i in range(1, len(rows) + 1)} | {"u"}
+    print("  [H] a GGUF model from a Hugging Face link")
+    valid = {str(i) for i in range(1, len(rows) + 1)} | {"h"}
     ans = ask("Choose", 1, valid).lower()
-    if ans == "u":
+    if ans == "h":
         return _choose_hf(hw)
     m, q, _ctx, _v = rows[int(ans) - 1]
     return m, q
 
 
 def _choose_hf(hw):
-    print("\n  Hugging Face models:")
-    for i, (repo, note) in enumerate(hf.SUGGESTED, 1):
-        print(f"  [{i}] {note}")
-    n = len(hf.SUGGESTED) + 1
-    print(f"  [{n}] paste a link (https://huggingface.co/OWNER/NAME)")
-    ans = ask("Choose", 1, {str(i) for i in range(1, n + 1)})
+    print("\n  Paste the link to a GGUF model repository, e.g. "
+          "https://huggingface.co/unsloth/Qwen3.6-35B-A3B-GGUF")
     while True:
-        link = hf.SUGGESTED[int(ans) - 1][0] if int(ans) < n else input("  Link: ").strip()
+        link = input("  Link: ").strip()
+        if not link:
+            continue
         try:
             model, quant, ggufs = hf.resolve(link)
             break
         except (ValueError, OSError) as e:
             print(f"  {e}")
-            ans = str(n)
     ctx = catalog.default_ctx(model, hw)
     files = [g for g in ggufs if g["shards"] == 1 and not g["turboquant"]]
     print(f"\n  {model['display_name']} ({model['arch'].upper()}) - pick a file. Q4_K_M is the "

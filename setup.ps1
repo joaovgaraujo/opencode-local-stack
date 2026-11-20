@@ -60,8 +60,16 @@ if ($env:OCL_SETUP_ARGS) {
     $passArgs = @([regex]::Matches($env:OCL_SETUP_ARGS, '"[^"]*"|\S+') |
                   ForEach-Object { $_.Value.Trim('"') })
 }
+# --pause-on-error is for this script (used by OpenCodeLocal-Setup.exe), not install.py.
+$pauseOnError = $passArgs -contains "--pause-on-error"
+$passArgs = @($passArgs | Where-Object { $_ -ne "--pause-on-error" })
 & $exe @pre (Join-Path $PSScriptRoot "install.py") --install-node @passArgs @args
 $rc = $LASTEXITCODE
+if ($rc -ne 0 -and $pauseOnError) {
+    Write-Host ""
+    Write-Host "Setup stopped with an error (details above, also in setup.log)." -ForegroundColor Red
+    Read-Host "Press Enter to close" | Out-Null
+}
 
 # Double-clicked setup.cmd (Explorer -> cmd -> this script): keep the window
 # open so the result can be read. Started from a terminal: just return.

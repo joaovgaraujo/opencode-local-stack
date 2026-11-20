@@ -27,8 +27,8 @@ cd opencode-local-stack
 `setup.cmd` installs Python 3.12 with winget if it's missing, then asks four
 questions, each with a default you accept with Enter:
 
-1. Model: the catalog sorted by fit, or `U` for an uncensored/abliterated
-   model or any GGUF from a Hugging Face link.
+1. Model: the catalog sorted by fit, or `H` for a GGUF model from a Hugging
+   Face link.
 2. Context: 32K to 256K tokens. The default comes from total VRAM: 64K below
    16 GB, 128K below 24 GB, 256K above.
 3. Thinking: limited (default), off, or unlimited.
@@ -108,20 +108,19 @@ memory.
 
 ## Models from Hugging Face
 
-In the wizard choose `U`, or pass a link:
+In the wizard choose `H`, or pass a link:
 
 ```
-.\setup.cmd --hf https://huggingface.co/HauhauCS/Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive
-.\setup.cmd --hf https://huggingface.co/mradermacher/Huihui-Qwen3.6-35B-A3B-abliterated-GGUF --hf-file Huihui-Qwen3.6-35B-A3B-abliterated.Q4_K_M.gguf
+.\setup.cmd --hf https://huggingface.co/unsloth/Qwen3.6-35B-A3B-GGUF
+.\setup.cmd --hf https://huggingface.co/unsloth/Qwen3.6-35B-A3B-GGUF --hf-file Qwen3.6-35B-A3B-UD-Q5_K_XL.gguf
 ```
 
 A repo link picks the Q4_K_M-class file; a link to one `.gguf` file picks
 that file. The installer reads the file sizes and the GGUF architecture from
 Hugging Face to decide how the model is served. The repo needs single-file
 GGUFs (most `-GGUF` repos by bartowski, unsloth or mradermacher have them).
-The HauhauCS model passed all tests here; other repos are not curated, and the
-tests at the end of the install are what tell you whether one works with
-OpenCode.
+Repos from a link are not curated; the tests at the end of the install are
+what tell you whether one works with OpenCode.
 
 ## Other options
 

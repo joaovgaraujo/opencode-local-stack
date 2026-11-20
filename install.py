@@ -44,6 +44,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.request
 
@@ -124,6 +125,12 @@ def latest_build(backend, cuda_driver=None):
 
 def ensure_llamacpp(bin_dir, backend, log, progress, cuda_driver=None, update=False):
     existing = server.find_server_binary(bin_dir) if os.path.isdir(bin_dir) else None
+    if existing and update:
+        have = installed_build(bin_dir)
+        newest, _assets = latest_build(backend, cuda_driver)
+        if have and newest and have >= newest:
+            log(f"llama.cpp build {have} is already the newest")
+            update = False
     if existing and not update:
         build = installed_build(bin_dir)
         log(f"Using existing llama.cpp{f' build {build}' if build else ''}: {existing}")
@@ -549,9 +556,15 @@ def parse_args():
     p.add_argument("--think-budget", type=int, default=None, metavar="TOKENS",
                    help="token cap for --think limited (default 4096)")
     p.add_argument("--update-llamacpp", action="store_true",
-                   help="replace an existing llama.cpp folder with the newest build")
+                   help="replace an existing llama.cpp folder with the newest build "
+                        "(skipped when it is already the newest)")
+    p.add_argument("--allow-ps-scripts", action="store_true",
+                   help="Windows: let PowerShell run local scripts for this user "
+                        "(RemoteSigned) so a plain `opencode` works")
+    p.add_argument("--log", metavar="FILE", help="also write the output to FILE")
     p.add_argument("--list-models", action="store_true", help="print the catalog and exit")
-    p.add_argument("--model", help="catalog model id, e.g. qwen3.6-35b-a3b (see --list-models)")
+    p.add_argument("--model", help="catalog model id, e.g. qwen3.6-35b-a3b (see --list-models), "
+                                    "or 'auto' for the one that best fits this PC")
     p.add_argument("--quant", help="quant GGUF filename (llama.cpp) or mlx-community repo id "
                                     "(rapid-mlx/macOS) - see --list-models")
     p.add_argument("--profile", choices=["auto", "primary", "conservative"], default="auto",
@@ -596,6 +609,8 @@ def print_catalog():
 
 def main():
     args = parse_args()
+    if args.log:
+        _tee_output(args.log)
     if args.list_models:
         print_catalog()
         return
@@ -603,7 +618,7 @@ def main():
     hw = hwdetect.detect(ROOT)
     engine = hwdetect.pick_engine(hw)
     port = args.port if args.port is not None else (8000 if engine == "rapidmlx" else 8080)
-    args.allow_ps_scripts = None
+    args.allow_ps_scripts = args.allow_ps_scripts or None
     args.update_llamacpp = bool(args.update_llamacpp)
 
     model = quant = None
@@ -618,7 +633,13 @@ def main():
         print(f"Hugging Face model: {model['display_name']} -> {quant['file']} "
               f"({quant['size_gb']:.1f} GB, {model['arch']})")
     elif args.model:
-        model = catalog.get_model(args.model)
+        if args.model == "auto":
+            if engine == "rapidmlx":
+                die("--model auto is for llama.cpp (Windows/Linux); on a Mac pick a model.")
+            model, _q = catalog.recommended_model(hw)
+            print(f"Best fit for this PC: {model['display_name']}")
+        else:
+            model = catalog.get_model(args.model)
         if engine == "rapidmlx":
             quant = (catalog.get_mlx_quant(model, args.quant) if args.quant
                      else catalog.default_mlx_quant(model))
@@ -675,7 +696,55 @@ def main():
             print("  [WARN] estimated to need more than this PC's total memory at this "
                   "context; llama-server may fail to load. Try a smaller --ctx or quant.")
     _dispatch(model, quant, profile, hw, engine, port, args, args.skip_tests, print,
-              lambda *a: None)
+              console_progress())
+
+
+def console_progress():
+    """Download progress on one console line, at most once a second."""
+    state = {"t": 0.0}
+
+    def cb(done, total, label):
+        now = time.time()
+        finished = bool(total) and done >= total
+        if now - state["t"] < 1 and not finished:
+            return
+        state["t"] = now
+        if total:
+            line = f"  {label}: {done / 1e9:5.1f} / {total / 1e9:.1f} GB ({done * 100 // total}%)"
+        else:
+            line = f"  {label}: {done / 1e9:5.1f} GB"
+        print("\r" + line + "   ", end="\n" if finished else "", flush=True)
+
+    return cb
+
+
+class _Tee:
+    def __init__(self, stream, path):
+        self.stream = stream
+        self.file = open(path, "a", encoding="utf-8")
+
+    def write(self, data):
+        self.stream.write(data)
+        self.file.write(data)
+        self.file.flush()
+
+    def flush(self):
+        self.stream.flush()
+
+    def isatty(self):
+        return self.stream.isatty()
+
+    def __getattr__(self, name):
+        return getattr(self.stream, name)
+
+
+def _tee_output(path):
+    """--log: copy everything printed to a file, keeping the console a real
+    terminal (prompts and the progress line still work)."""
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(f"\n===== install.py {time.strftime('%Y-%m-%d %H:%M:%S')} {' '.join(sys.argv[1:])}\n")
+    sys.stdout = _Tee(sys.stdout, path)
+    sys.stderr = _Tee(sys.stderr, path)
 
 
 def _dispatch(model, quant, profile, hw, engine, port, args, skip_tests, log, progress):

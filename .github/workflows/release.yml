@@ -1,0 +1,71 @@
+name: Release
+
+# Builds OpenCodeLocal-Setup.exe with Inno Setup and publishes a GitHub
+# release when a v* tag is pushed. Release notes come from
+# docs/RELEASE-<version>.md. The installer is not code-signed, so Windows
+# SmartScreen may warn on first run ("More info" -> "Run anyway").
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Check Python sources
+        shell: pwsh
+        run: |
+          python -m py_compile install.py start.py (Get-ChildItem installer -Filter *.py).FullName
+          python install.py --list-models | Select-Object -First 3
+
+      - name: Install Inno Setup
+        run: choco install innosetup -y --no-progress
+
+      - name: Build installer
+        shell: pwsh
+        run: .\Build-Installer.ps1 -Version '${{ github.ref_name }}'
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: dist/OpenCodeLocal-Setup.exe
+
+      - name: Checksums
+        shell: pwsh
+        run: |
+          Copy-Item release\opencode-local-installer.cmd dist\
+          Get-FileHash dist\OpenCodeLocal-Setup.exe,dist\opencode-local-installer.cmd -Algorithm SHA256 |
+            ForEach-Object { "{0}  {1}" -f $_.Hash.ToLower(), (Split-Path $_.Path -Leaf) } |
+            Set-Content dist\SHA256SUMS.txt
+          Get-Content dist\SHA256SUMS.txt
+
+      - name: Pick release notes
+        id: notes
+        shell: pwsh
+        run: |
+          $version = '${{ github.ref_name }}'.TrimStart('v')
+          if (-not (Test-Path "docs/RELEASE-$version.md")) { throw "docs/RELEASE-$version.md is missing" }
+          "version=$version" >> $env:GITHUB_OUTPUT
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: false
+          body_path: docs/RELEASE-${{ steps.notes.outputs.version }}.md
+          files: |
+            dist/OpenCodeLocal-Setup.exe
+            dist/opencode-local-installer.cmd
+            dist/SHA256SUMS.txt
