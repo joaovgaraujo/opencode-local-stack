@@ -53,13 +53,17 @@ opencode-local
 
 It starts the model server in the background if it isn't running (about a
 minute the first time), then opens OpenCode in that folder. The server keeps
-running after you close OpenCode, so the next start is instant.
+running after you close OpenCode, so the next start is instant. After 10 idle
+minutes it unloads the model, freeing the GPU memory and RAM; the next request
+loads it again, which takes seconds while the file is still in Windows' file
+cache.
 
 ```
 opencode-local --think off                  this session without thinking
 opencode-local --think limited --think-budget 2048
 opencode-local --think on                   unlimited thinking
 opencode-local --ctx 131072                 another context size
+opencode-local --idle-minutes 30            unload after 30 idle minutes (0 = never)
 opencode-local --think off --save           make it the default
 opencode-local --status                     what is running
 opencode-local -c                           continue the last OpenCode session

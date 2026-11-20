@@ -276,7 +276,10 @@ def run_pipeline_llamacpp(model, quant, profile, hw, skip_tests=False, port=8080
         "think_budget": think_budget or old.get("think_budget") or
         settings.DEFAULTS["think_budget"],
         "extra_args": extra_server_args,
+        "idle_minutes": old.get("idle_minutes", settings.DEFAULTS["idle_minutes"]),
     })
+    s["sleep_supported"] = settings.binary_supports(
+        os.path.join(resolved_bin_dir, server.server_exe_name()), "--sleep-idle-seconds")
     settings.save(ROOT, s)
     args = settings.server_args(s, ROOT)
     log(f"  llama-server {' '.join(args)}")

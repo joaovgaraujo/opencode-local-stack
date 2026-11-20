@@ -33,6 +33,9 @@ DEFAULTS = {
     "kv_type": "q8_0",
     "batch": 2048,
     "fit_margin_mib": 1536,
+    # Unload the model after this many idle minutes (llama.cpp
+    # --sleep-idle-seconds); the next request loads it again. 0 = stay loaded.
+    "idle_minutes": 10,
     "extra_args": [],
 }
 
@@ -44,6 +47,7 @@ PLACEMENT_FLAGS = ("-ngl", "--n-gpu-layers", "--gpu-layers", "--cpu-moe", "-cmoe
 BATCH_FLAGS = ("-ub", "--ubatch-size", "-b", "--batch-size")
 REASONING_FLAGS = ("-rea", "--reasoning", "--reasoning-budget")
 PARALLEL_FLAGS = ("-np", "--parallel")
+SLEEP_FLAGS = ("--sleep-idle-seconds",)
 # OpenCode's system prompt and tool definitions take ~10K tokens.
 MIN_CTX = 32768
 
@@ -115,12 +119,30 @@ def server_args(s, root):
         args += ["--load-mode", "none"]
     if s.get("reasoning", True) and not user_sets(extra, REASONING_FLAGS):
         args += thinking_args(s["thinking"], s["think_budget"])
+    idle = int(s.get("idle_minutes") or 0)
+    if idle > 0 and s.get("sleep_supported", True) and not user_sets(extra, SLEEP_FLAGS):
+        args += ["--sleep-idle-seconds", str(idle * 60)]
     return args + extra
+
+
+def binary_supports(server_bin, flag):
+    """True when this llama-server build lists flag in --help (older builds and
+    forks may not have --sleep-idle-seconds, and would refuse to start)."""
+    import subprocess
+    try:
+        r = subprocess.run([server_bin, "--help"], capture_output=True, text=True, timeout=60,
+                           encoding="utf-8", errors="replace")
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return flag in (r.stdout or "") + (r.stderr or "")
 
 
 def describe(s):
     think = {"off": "thinking off",
              "limited": f"thinking limited to {s['think_budget']} tokens",
              "on": "thinking unlimited"}[s["thinking"]]
-    return (f"{s['display_name']} | context {s['ctx']:,} | {think} | "
+    idle = int(s.get("idle_minutes") or 0)
+    sleep = (f"unloads after {idle} min idle" if idle > 0 and s.get("sleep_supported", True)
+             else "stays loaded")
+    return (f"{s['display_name']} | context {s['ctx']:,} | {think} | {sleep} | "
             f"http://127.0.0.1:{s['port']}/v1")

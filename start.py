@@ -7,6 +7,7 @@ in the current folder. Installed on PATH by install.py / setup.cmd.
     opencode-local --think limited --think-budget 2048
     opencode-local --think on           unlimited thinking
     opencode-local --ctx 131072         different context size
+    opencode-local --idle-minutes 30    unload the model after 30 idle minutes (0 = never)
     opencode-local --think off --save   make it the default
     opencode-local --server-only        just the server (for other tools)
     opencode-local --status             what is running
@@ -14,6 +15,8 @@ in the current folder. Installed on PATH by install.py / setup.cmd.
     opencode-local run "fix the tests"  anything after the options goes to OpenCode
 
 The server keeps running after OpenCode closes, so the next start is instant.
+After 10 idle minutes it unloads the model to free GPU memory and RAM; the
+next request loads it again (seconds when the file is still in Windows' cache).
 Settings come from settings.json, written by the installer.
 """
 import argparse
@@ -40,6 +43,9 @@ def parse_args():
     p.add_argument("--think-budget", type=int, metavar="TOKENS",
                    help="cap for --think limited (default 4096; ~1 min on a 12 GB GPU)")
     p.add_argument("--ctx", type=int, metavar="TOKENS", help="context size, e.g. 65536")
+    p.add_argument("--idle-minutes", type=int, metavar="MIN",
+                   help="unload the model after MIN idle minutes; the next request loads it "
+                        "again (default 10; 0 = keep it loaded)")
     p.add_argument("--save", action="store_true", help="keep these options as the default")
     p.add_argument("--server-only", action="store_true", help="start the server, not OpenCode")
     p.add_argument("--restart", action="store_true", help="restart the server even if running")
@@ -154,6 +160,8 @@ def main():
             s["thinking"] = "limited"
     if opts.ctx:
         s["ctx"] = opts.ctx
+    if opts.idle_minutes is not None:
+        s["idle_minutes"] = max(0, opts.idle_minutes)
     if opts.save:
         settings.save(ROOT, s)
         print("Saved as default.")
