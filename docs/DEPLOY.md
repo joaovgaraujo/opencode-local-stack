@@ -91,7 +91,7 @@ opencode-local --stop
 The exact arguments it passes to llama-server are in `.server-state.json`
 after a start. Point OpenCode at the server by hand:
 ```
-npm install -g opencode-ai@1.19.6 @ai-sdk/openai-compatible@3.0.93
+npm install -g opencode-ai@1.19.6 @ai-sdk/openai-compatible@3.0.94
 # then merge ./opencode.json into %USERPROFILE%\.config\opencode\opencode.json
 # (Linux: ~/.config/opencode/opencode.json); opencode-local does this for you
 opencode      # then /models -> pick the local one

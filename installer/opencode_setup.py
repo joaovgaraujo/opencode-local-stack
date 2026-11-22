@@ -162,7 +162,7 @@ def try_install_node(log):
 
 
 OPENCODE_VERSION = "1.19.6"
-OPENAI_COMPAT_VERSION = "3.0.93"
+OPENAI_COMPAT_VERSION = "3.0.94"
 
 
 def _npm_prefix_writable():

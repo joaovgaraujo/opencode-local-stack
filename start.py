@@ -150,6 +150,45 @@ def ensure_server(s):
     return False
 
 
+def save_console_modes():
+    """Windows: the console input/output modes before OpenCode changes them."""
+    if os.name != "nt":
+        return None
+    import ctypes
+    k32 = ctypes.windll.kernel32
+    modes = []
+    for std in (-10, -11):  # STD_INPUT_HANDLE, STD_OUTPUT_HANDLE
+        h = k32.GetStdHandle(std)
+        m = ctypes.c_uint32()
+        modes.append((h, m.value) if k32.GetConsoleMode(h, ctypes.byref(m)) else None)
+    return modes
+
+
+def restore_terminal(saved):
+    """Put the terminal back the way it was, however OpenCode exited.
+
+    OpenCode's interface turns on mouse tracking; if it is aborted or crashes
+    without switching it off, every mouse move then prints codes such as
+    "[<35;78;1M" at the prompt. Restore the saved Windows console modes, then
+    send the "mouse tracking off" sequences, show the cursor, reset colors."""
+    if os.name == "nt" and saved:
+        import ctypes
+        k32 = ctypes.windll.kernel32
+        for entry in saved:
+            if entry:
+                k32.SetConsoleMode(entry[0], entry[1])
+        out = saved[1]
+        if out:  # make sure the sequences below are interpreted, not printed
+            k32.SetConsoleMode(out[0], out[1] | 0x0004)  # ENABLE_VIRTUAL_TERMINAL_PROCESSING
+    if sys.stdout.isatty():
+        sys.stdout.write("\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1015l"
+                         "\x1b[?2004l\x1b[?25h\x1b[0m")
+        sys.stdout.flush()
+    if os.name == "nt" and saved and saved[1]:
+        import ctypes
+        ctypes.windll.kernel32.SetConsoleMode(saved[1][0], saved[1][1])
+
+
 def write_opencode_config(s):
     """Point OpenCode at this server with the current context size."""
     model = {"id": s["model_id"], "display_name": s["display_name"],
@@ -210,7 +249,13 @@ def main():
               f"  npm install -g opencode-ai@{opencode_setup.OPENCODE_VERSION}")
         return 1
     sys.stdout.flush()
-    rc = subprocess.call([exe] + passthrough)
+    saved = save_console_modes()
+    try:
+        rc = subprocess.call([exe] + passthrough)
+    except KeyboardInterrupt:
+        rc = 130
+    finally:
+        restore_terminal(saved)
     print("OpenCode closed. The model server is still running (fast next start).\n"
           "  continue the last session:  opencode-local -c\n"
           "  continue a given session:   opencode-local -s <session id>\n"
