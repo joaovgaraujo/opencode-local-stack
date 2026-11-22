@@ -46,12 +46,11 @@ in `settings.json`; it replaces the matching installer default (for example
 (`--extra-server-arg=--threads --extra-server-arg 16`). These llama.cpp-only
 flags are rejected on the macOS Rapid-MLX path.
 
-Node.js (required for OpenCode) is never installed silently. If it's missing,
-`install.py` prints the right command for your OS and stops. Pass
-`--install-node` to let it run `winget install OpenJS.NodeJS.LTS` for you on
-Windows. On Linux there's no single package manager to assume, so it always
-just prints the command (`apt`/`dnf`/`pacman`/nvm) rather than guessing which
-one you use and needing `sudo` on your behalf.
+OpenCode 2.x comes from its GitHub release into `opencode/` (no Node.js
+needed). Node.js is only used by the fallback, `npm install -g opencode-ai@1.19.6`,
+when that download fails; `--install-node` lets the installer get Node.js for
+it (winget on Windows, Homebrew or nodejs.org on macOS, nodejs.org into `./node`
+on Linux, no sudo).
 
 ## What's in the repo
 
@@ -91,7 +90,7 @@ opencode-local --stop
 The exact arguments it passes to llama-server are in `.server-state.json`
 after a start. Point OpenCode at the server by hand:
 ```
-npm install -g opencode-ai@1.19.6 @ai-sdk/openai-compatible@3.0.94
+# OpenCode: https://github.com/anomalyco/opencode/releases (2.3.2)
 # then merge ./opencode.json into %USERPROFILE%\.config\opencode\opencode.json
 # (Linux: ~/.config/opencode/opencode.json); opencode-local does this for you
 opencode      # then /models -> pick the local one

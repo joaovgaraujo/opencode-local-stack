@@ -161,8 +161,131 @@ def try_install_node(log):
     return None
 
 
-OPENCODE_VERSION = "1.19.6"
+# OpenCode 2.x ships only as release binaries on GitHub (npm's opencode-ai
+# stops at 1.19.x), so the installer downloads the binary into <repo>/opencode
+# and needs no Node.js for it. npm 1.19.6 remains the fallback. Tested with
+# 2.3.2: our provider config, the kill-by-name deny rules and existing 1.19
+# sessions all work; sessions created by 2.x are not visible to 1.19.
+OPENCODE_VERSION = "2.3.2"
+OPENCODE_REPO = "anomalyco/opencode"
+OPENCODE_NPM_VERSION = "1.19.6"
 OPENAI_COMPAT_VERSION = "3.0.94"
+OPENCODE_DIR_NAME = "opencode"
+
+
+def _opencode_asset():
+    arch = "arm64" if platform.machine().lower() in ("arm64", "aarch64") else "x64"
+    system = platform.system()
+    if system == "Windows":
+        return f"opencode-windows-{arch}.zip"
+    if system == "Darwin":
+        return f"opencode-darwin-{arch}.zip"
+    return f"opencode-linux-{arch}.tar.gz"
+
+
+def local_opencode():
+    """The OpenCode binary the installer downloaded, or None."""
+    name = "opencode.exe" if platform.system() == "Windows" else "opencode"
+    path = os.path.join(ROOT, OPENCODE_DIR_NAME, name)
+    return path if os.path.isfile(path) else None
+
+
+def _binary_version(exe):
+    try:
+        out = subprocess.run([exe, "--version"], capture_output=True, text=True, timeout=60,
+                             encoding="utf-8", errors="replace").stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    m = __import__("re").search(r"(\d+\.\d+\.\d+)", out or "")
+    return m.group(1) if m else None
+
+
+def install_opencode_binary(log):
+    """Download OpenCode OPENCODE_VERSION from its GitHub release into
+    <repo>/opencode, verified against the release's SHA256SUMS. Returns the
+    binary path, or None (the caller then falls back to npm)."""
+    import hashlib
+    import tempfile
+    from . import download
+    existing = local_opencode()
+    if existing and _binary_version(existing) == OPENCODE_VERSION:
+        log(f"  OpenCode {OPENCODE_VERSION} already installed: {existing}")
+        return existing
+    asset = _opencode_asset()
+    base = f"https://github.com/{OPENCODE_REPO}/releases/download/v{OPENCODE_VERSION}/"
+    tmp = tempfile.mkdtemp(prefix="opencode-dl-")
+    archive = os.path.join(tmp, asset)
+    sums = os.path.join(tmp, "SHA256SUMS")
+    log(f"Downloading OpenCode {OPENCODE_VERSION} ({asset}) ...")
+    try:
+        download.download_with_retries(base + asset, archive)
+        download.download_with_retries(base + "SHA256SUMS", sums)
+        want = next((ln.split()[0] for ln in open(sums, encoding="utf-8")
+                     if ln.strip().endswith(asset)), None)
+        h = hashlib.sha256()
+        with open(archive, "rb") as f:
+            for chunk in iter(lambda: f.read(1 << 20), b""):
+                h.update(chunk)
+        if not want or h.hexdigest() != want.lower():
+            log("  checksum mismatch for the OpenCode download; not installing it")
+            return None
+        target = os.path.join(ROOT, OPENCODE_DIR_NAME)
+        shutil.rmtree(target, ignore_errors=True)
+        download.extract_archive(archive, target)
+    except (OSError, RuntimeError, ValueError) as e:
+        log(f"  could not download OpenCode {OPENCODE_VERSION}: {e}")
+        return None
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    exe = local_opencode()
+    if exe and platform.system() != "Windows":
+        os.chmod(exe, 0o755)
+    if not exe or _binary_version(exe) != OPENCODE_VERSION:
+        log("  the downloaded OpenCode doesn't run here")
+        return None
+    log(f"  OpenCode {OPENCODE_VERSION} -> {exe}")
+    return exe
+
+
+def install_opencode_command(exe, log):
+    """Put a plain `opencode` command on PATH that runs the downloaded binary,
+    and remove the npm opencode-ai 1.x an earlier install added: a 1.x opencode
+    can't see sessions created by 2.x, so two versions would be confusing."""
+    if platform.system() == "Windows":
+        if find_npm():
+            r = subprocess.run(["npm", "ls", "-g", "--depth=0", "opencode-ai"],
+                               capture_output=True, text=True, shell=True)
+            if "opencode-ai@" in (r.stdout or ""):
+                running = subprocess.run(
+                    ["powershell", "-NoProfile", "-Command",
+                     "Get-CimInstance Win32_Process -Filter \"Name='opencode.exe'\" | "
+                     "Where-Object { $_.ExecutablePath -match 'node_modules' } | "
+                     "Select-Object -ExpandProperty ProcessId"],
+                    capture_output=True, text=True).stdout.strip()
+                if running:
+                    log("  the old npm OpenCode (1.x) is still open; close it and re-run setup "
+                        "to remove it (the new one is used either way)")
+                else:
+                    subprocess.run(["npm", "uninstall", "-g", "opencode-ai"],
+                                   capture_output=True, text=True, shell=True)
+                    log("  removed the old npm opencode-ai (1.x)")
+        folder = os.path.join(os.environ.get("LOCALAPPDATA", ""), "Microsoft", "WindowsApps")
+        if os.path.isdir(folder):
+            with open(os.path.join(folder, "opencode.cmd"), "w", encoding="utf-8",
+                      newline="") as f:
+                f.write(f'@echo off\r\n"{exe}" %*\r\n')
+            log(f"  `opencode` command -> {exe}")
+        return
+    local_bin = os.path.join(os.path.expanduser("~"), ".local", "bin")
+    os.makedirs(local_bin, exist_ok=True)
+    link = os.path.join(local_bin, "opencode")
+    try:
+        if os.path.islink(link) or os.path.isfile(link):
+            os.remove(link)
+        os.symlink(exe, link)
+        log(f"  `opencode` command -> {exe}")
+    except OSError as e:
+        log(f"  could not link {link}: {e}")
 
 
 def _npm_prefix_writable():
@@ -178,7 +301,7 @@ def _npm_prefix_writable():
 
 
 def npm_install_opencode(log):
-    cmd = ["npm", "install", "-g", f"opencode-ai@{OPENCODE_VERSION}",
+    cmd = ["npm", "install", "-g", f"opencode-ai@{OPENCODE_NPM_VERSION}",
            f"@ai-sdk/openai-compatible@{OPENAI_COMPAT_VERSION}"]
     if not _npm_prefix_writable():
         # No sudo: install into ~/.local (opencode lands in ~/.local/bin)
@@ -317,12 +440,16 @@ def install_config(opencode_json_path):
 
 
 def find_opencode():
-    """Path of the OpenCode launcher to run, or None.
+    """Path of the OpenCode to run: the installer's own binary first, then an
+    npm install, or None.
 
     On Windows npm installs three launchers: opencode.ps1, opencode.cmd and a
     shell script. PowerShell prefers the .ps1, which the default execution
     policy blocks ("running scripts is disabled"), so OpenCode looks missing
     in every folder. The .cmd launcher is never blocked; use it."""
+    local = local_opencode()
+    if local:
+        return local
     if platform.system() == "Windows":
         refresh_windows_path()
         exe = shutil.which("opencode.cmd")

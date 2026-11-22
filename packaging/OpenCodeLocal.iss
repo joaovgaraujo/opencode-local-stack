@@ -10,7 +10,7 @@
 ;   OpenCodeLocal-Setup.exe /VERYSILENT /DIR="D:\OpenCodeLocal" /OCLARGS="--model auto --think off"
 
 #ifndef MyAppVersion
-  #define MyAppVersion "1.2.6"
+  #define MyAppVersion "1.3.0"
 #endif
 #define MyAppName "OpenCode Local"
 #define MyOutputBase "OpenCodeLocal-Setup"
@@ -185,6 +185,8 @@ Type: files; Name: "{app}\opencode.json"
 Type: files; Name: "{app}\opencode-local.cmd"
 Type: files; Name: "{app}\RESULTS.md"
 Type: filesandordirs; Name: "{app}\opencode-scratch"
+Type: filesandordirs; Name: "{app}\opencode"
+Type: filesandordirs; Name: "{app}\.opencode-open"
 Type: filesandordirs; Name: "{app}\installer\__pycache__"
 Type: filesandordirs; Name: "{app}\tests\__pycache__"
 Type: filesandordirs; Name: "{app}\llama.cpp.new"
@@ -333,6 +335,7 @@ begin
            ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, RC);
     RemoveLauncher(ExpandConstant('{userappdata}\npm\opencode-local.cmd'));
     RemoveLauncher(ExpandConstant('{localappdata}\Microsoft\WindowsApps\opencode-local.cmd'));
+    RemoveLauncher(ExpandConstant('{localappdata}\Microsoft\WindowsApps\opencode.cmd'));
     if (DirExists(ExpandConstant('{app}\models')) or DirExists(ExpandConstant('{app}\llama.cpp'))) and
        (SuppressibleMsgBox(CustomMessage('DeleteModels'), mbConfirmation, MB_YESNO, IDNO) = IDYES) then
     begin

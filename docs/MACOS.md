@@ -165,9 +165,9 @@ catalogs together.
   rights. Python 3.15 is skipped: some of rapid-mlx's dependencies (tiktoken)
   have no build for it yet. `setup.sh` itself runs on the Python 3.9 macOS
   ships.
-- Node.js for OpenCode: with `--install-node` (`setup.sh` passes it) it comes
-  from Homebrew when present, otherwise the official nodejs.org macOS
-  download goes into `./node`.
+- OpenCode 2.3.2 comes from its GitHub release (`opencode-darwin-arm64.zip`),
+  so Node.js is only needed if that download fails and the installer falls
+  back to npm.
 
 Tested on a 16 GB Apple M4 (macOS 27) with rapid-mlx 1.0.5 and
 mlx-community/Qwen3.5-9B-4bit: the four validation tests and the OpenCode

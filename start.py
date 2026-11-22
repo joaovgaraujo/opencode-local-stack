@@ -362,8 +362,8 @@ def main():
         return handled
     exe = opencode_setup.find_opencode()
     if not exe:
-        print("OpenCode is not installed. Install it with:\n"
-              f"  npm install -g opencode-ai@{opencode_setup.OPENCODE_VERSION}")
+        print("OpenCode is not installed. Re-run setup (setup.cmd / setup.sh / "
+              "OpenCodeLocal-Setup.exe) to install it.")
         return 1
     lock = folder_lock_path()
     other = running_pid(lock)

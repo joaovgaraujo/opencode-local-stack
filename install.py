@@ -683,25 +683,30 @@ def _run_validate(port, model_id, log, ctx=None):
 def _setup_opencode(model_id, port, install_node, log, provider_key="llamacpp",
                     allow_ps_scripts=None, skip_smoke=False):
     results = {}
-    node = opencode_setup.find_node()
-    if not node:
-        # Node may already be installed in a terminal opened before its PATH change
-        opencode_setup.refresh_windows_path()
+    exe = opencode_setup.install_opencode_binary(log)
+    if exe:
+        opencode_setup.install_opencode_command(exe, log)
+    else:
+        # Fallback: OpenCode 1.x from npm (needs Node.js).
         node = opencode_setup.find_node()
-    if not node:
-        if install_node:
-            node = opencode_setup.try_install_node(log)
         if not node:
-            log(f"Node not found - skipping OpenCode. Install it with "
-                f"{opencode_setup.node_install_hint()}")
+            # Node may already be installed in a terminal opened before its PATH change
+            opencode_setup.refresh_windows_path()
+            node = opencode_setup.find_node()
+        if not node:
+            if install_node:
+                node = opencode_setup.try_install_node(log)
+            if not node:
+                log(f"Node not found - skipping OpenCode. Install it with "
+                    f"{opencode_setup.node_install_hint()}")
+                return results
+        log(f"Installing OpenCode {opencode_setup.OPENCODE_NPM_VERSION} (npm) ...")
+        opencode_setup.npm_install_opencode(log)
+        if not opencode_setup.ensure_opencode_on_path(log):
+            results["opencode-agentic"] = "FAIL"
             return results
-    log("Installing OpenCode (npm) ...")
-    opencode_setup.npm_install_opencode(log)
     dest = opencode_setup.install_config(os.path.join(ROOT, "opencode.json"))
     log(f"  OpenCode config -> {dest}")
-    if not opencode_setup.ensure_opencode_on_path(log):
-        results["opencode-agentic"] = "FAIL"
-        return results
     opencode_setup.install_launcher(ROOT, sys.executable, log)
     if opencode_setup.powershell_scripts_blocked():
         if allow_ps_scripts:

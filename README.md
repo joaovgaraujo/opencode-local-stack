@@ -36,9 +36,9 @@ questions, each with a default you accept with Enter:
    (that block is what makes a plain `opencode` fail with "running scripts is
    disabled").
 
-Then it downloads the newest llama.cpp build for your GPU driver, the model,
-Node.js and OpenCode, runs the tests, and installs the `opencode-local`
-command. Re-running it is safe; it reuses what is already downloaded and
+Then it downloads the newest llama.cpp build for your GPU driver, the model
+and OpenCode 2.3.2, runs the tests, and installs the `opencode-local` and
+`opencode` commands. Re-running it is safe; it reuses what is already downloaded and
 offers to update an older llama.cpp.
 
 ## Install (Linux and macOS)
@@ -49,9 +49,9 @@ curl -fsSL https://github.com/joaovgaraujo/opencode-local-stack/releases/latest/
 
 That downloads the latest release into `~/opencode-local` (set `OCL_DEST` to
 change it) and runs `setup.sh`, the same wizard as on Windows. With git:
-`git clone` the repo and run `./setup.sh`. Nothing uses sudo: llama.cpp, Node.js
-and the model go into the install folder, OpenCode and `opencode-local` into
-`~/.local`. If `~/.local/bin` isn't on your PATH, the installer adds it to
+`git clone` the repo and run `./setup.sh`. Nothing uses sudo: llama.cpp,
+OpenCode and the model go into the install folder, the `opencode-local` and
+`opencode` commands into `~/.local/bin`. If `~/.local/bin` isn't on your PATH, the installer adds it to
 `~/.profile` (Linux) or `~/.zprofile` (macOS); open a new terminal afterwards.
 
 **Linux with an NVIDIA GPU** gets llama.cpp's prebuilt CUDA build, matched to
@@ -64,8 +64,7 @@ compiler and the CUDA toolkit (`nvcc`). AMD uses ROCm, other GPUs Vulkan.
 **macOS on Apple Silicon** runs MLX models with rapid-mlx 1.0.5. It needs
 Python 3.12 or 3.13: the installer uses one if the Mac has it (Homebrew or
 python.org), and otherwise downloads `uv` into the install folder to get a
-private Python 3.12, with no Homebrew or admin rights needed. Node.js comes
-from Homebrew when present, else from nodejs.org. Thinking off/limited/on and
+private Python 3.12, with no Homebrew or admin rights needed. Thinking off/limited/on and
 the idle unload work the same way; Hugging Face GGUF links are llama.cpp-only
 and not offered on a Mac.
 
@@ -165,9 +164,12 @@ python install.py --gui                      # the older Tkinter window
 python install.py --skip-tests
 ```
 
-Node.js is required for OpenCode and is installed only with `--install-node`
-(`setup.cmd` and `setup.sh` pass it): winget on Windows, Homebrew or the
-nodejs.org download on macOS, and the nodejs.org tarball in `./node` on Linux.
+OpenCode is downloaded from its GitHub release (2.x is not published on npm),
+checked against the release's SHA256SUMS, into `opencode/` in the install
+folder, so Node.js is not needed. If that download fails, the installer falls
+back to `npm install -g opencode-ai@1.19.6`, which needs Node.js; `--install-node`
+(passed by `setup.cmd` and `setup.sh`) lets it install Node.js for that: winget
+on Windows, Homebrew or nodejs.org on macOS, the nodejs.org tarball on Linux.
 
 ## Pick a model
 
