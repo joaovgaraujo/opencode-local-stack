@@ -436,6 +436,10 @@ def install_launcher(root, python_exe, log):
         f.write(body)
     if not windows:
         os.chmod(os.path.join(root, name), 0o755)
+    # Every target, not just the first: a terminal can start with a PATH from
+    # before Node.js was installed (seen with Windows Terminal), which then
+    # lacks npm's folder but still has WindowsApps, on PATH since Windows setup.
+    installed = []
     for folder in targets:
         if not folder or (windows and not os.path.isdir(folder)):
             continue
@@ -447,11 +451,13 @@ def install_launcher(root, python_exe, log):
             if not windows:
                 os.chmod(dest, 0o755)
             log(f"  start command installed: {dest}")
-            return dest
+            installed.append(dest)
         except OSError:
             continue
-    log(f"  could not put opencode-local on PATH; run it as {os.path.join(root, name)}")
-    return None
+    if not installed:
+        log(f"  could not put opencode-local on PATH; run it as {os.path.join(root, name)}")
+        return None
+    return installed[0]
 
 
 def _run_opencode(args, cwd, timeout_s):

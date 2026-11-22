@@ -10,7 +10,7 @@
 ;   OpenCodeLocal-Setup.exe /VERYSILENT /DIR="D:\OpenCodeLocal" /OCLARGS="--model auto --think off"
 
 #ifndef MyAppVersion
-  #define MyAppVersion "1.2.5"
+  #define MyAppVersion "1.2.6"
 #endif
 #define MyAppName "OpenCode Local"
 #define MyOutputBase "OpenCodeLocal-Setup"
