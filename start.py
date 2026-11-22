@@ -201,6 +201,19 @@ def clear_lock(lock):
         pass
 
 
+def kill_tree(pid):
+    """End OpenCode and its children (on Windows, opencode.cmd -> opencode.exe)."""
+    if os.name == "nt":
+        subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True)
+    else:
+        # Not killpg: OpenCode shares this wrapper's (and the shell's) group.
+        import signal
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except OSError:
+            pass
+
+
 def save_console_modes():
     """Windows: the console input/output modes before OpenCode changes them."""
     if os.name != "nt":
@@ -312,15 +325,25 @@ def main():
             return 1
     sys.stdout.flush()
     saved = save_console_modes()
+    # Ctrl+C reaches every process in the terminal. OpenCode handles it
+    # itself; this wrapper must keep waiting. Before, it exited on Ctrl+C
+    # while OpenCode kept running, so the shell prompt came back under a
+    # still-drawing OpenCode and mouse codes flooded the window.
+    import signal
+    old_handler = signal.signal(signal.SIGINT, lambda *_: None)
+    proc = None
+    rc = 1
     try:
         proc = subprocess.Popen([exe] + passthrough)
         write_lock(lock, proc.pid)
         rc = proc.wait()
-    except KeyboardInterrupt:
-        rc = 130
     finally:
+        if proc is not None and proc.poll() is None:
+            # Leaving early for any reason: never orphan OpenCode.
+            kill_tree(proc.pid)
         restore_terminal(saved)
         clear_lock(lock)
+        signal.signal(signal.SIGINT, old_handler)
     print("OpenCode closed. The model server is still running (fast next start).\n"
           "  continue the last session:  opencode-local -c\n"
           "  continue a given session:   opencode-local -s <session id>\n"
