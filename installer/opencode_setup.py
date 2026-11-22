@@ -247,6 +247,43 @@ def opencode_config_dir():
     return os.path.join(home, ".config", "opencode")
 
 
+# Shell commands that kill processes BY NAME. A local model restarting its own
+# dev server ran `taskkill /F /IM python.exe` and `Get-Process python |
+# Stop-Process -Force`, which also killed every other Python program on the
+# PC. These are denied; stopping a process by its ID stays allowed. OpenCode
+# matches each part of a command (a pipeline is checked part by part), `*`
+# matches anything, case is ignored, and the last matching rule wins, so the
+# catch-all "*": "allow" must come first. Tested with OpenCode 1.19.6.
+KILL_RULES = {
+    "*taskkill*/IM*": "deny",
+    "*Stop-Process*-Name*": "deny",
+    "Stop-Process": "deny",
+    "Stop-Process -Force": "deny",
+    "Stop-Process -Force *": "deny",
+    "*| Stop-Process*": "deny",
+    "*|Stop-Process*": "deny",
+    "*pkill *": "deny",
+    "*killall *": "deny",
+}
+
+
+def with_kill_rules(permission):
+    """permission block with KILL_RULES added; rules the user already set for
+    the same patterns are kept."""
+    permission = dict(permission) if isinstance(permission, dict) else {}
+    bash = permission.get("bash")
+    if isinstance(bash, str):
+        bash = {"*": bash}
+    elif not isinstance(bash, dict):
+        bash = {}
+    out = {"*": bash.get("*", "allow")}
+    out.update({k: v for k, v in bash.items() if k != "*"})
+    for pattern, effect in KILL_RULES.items():
+        out.setdefault(pattern, effect)
+    permission["bash"] = out
+    return permission
+
+
 def install_config(opencode_json_path):
     """Merge this stack's provider + default model into the user's global
     OpenCode config, keeping anything else they configured (other providers,
@@ -272,6 +309,7 @@ def install_config(opencode_json_path):
     providers = merged.get("provider") if isinstance(merged.get("provider"), dict) else {}
     providers.update(ours["provider"])
     merged["provider"] = providers
+    merged["permission"] = with_kill_rules(merged.get("permission"))
     with open(dest, "w", encoding="utf-8") as f:
         json.dump(merged, f, indent=2)
         f.write("\n")
@@ -364,14 +402,33 @@ def install_launcher(root, python_exe, log):
         # predates the Node install (e.g. one opened by Windows Terminal), the
         # npm folder is added to that window, so a plain `opencode` (such as
         # the "opencode -s <session>" hint OpenCode prints) works there too.
+        # Python only prepares (server, config) and cleans up afterwards;
+        # this batch file runs OpenCode itself. A model that runs
+        # `taskkill /IM python.exe` to restart its own dev server used to
+        # kill the Python wrapper and orphan OpenCode, garbling the window.
         body = ('@echo off\r\n'
                 'where opencode >nul 2>nul || set "PATH=%APPDATA%\\npm;%PATH%"\r\n'
-                f'"{python_exe}" "{start_py}" %*\r\n')
+                'set "OCL_NEXT=%TEMP%\\opencode-local-%RANDOM%%RANDOM%.cmd"\r\n'
+                f'"{python_exe}" "{start_py}" --prepare "%OCL_NEXT%" %*\r\n'
+                'if errorlevel 3 exit /b 0\r\n'
+                'if errorlevel 1 exit /b 1\r\n'
+                'call "%OCL_NEXT%"\r\n'
+                'set "OCL_RC=%ERRORLEVEL%"\r\n'
+                f'"{python_exe}" "{start_py}" --after "%OCL_NEXT%"\r\n'
+                'exit /b %OCL_RC%\r\n')
         targets = [npm_global_bin(),
                    os.path.join(os.environ.get("LOCALAPPDATA", ""), "Microsoft", "WindowsApps")]
         name = "opencode-local.cmd"
     else:
-        body = f'#!/usr/bin/env sh\nexec "{python_exe}" "{start_py}" "$@"\n'
+        body = ('#!/usr/bin/env sh\n'
+                'NEXT=$(mktemp "${TMPDIR:-/tmp}/opencode-local.XXXXXX")\n'
+                f'"{python_exe}" "{start_py}" --prepare "$NEXT" "$@"\n'
+                'rc=$?\n'
+                'if [ "$rc" -ne 0 ]; then rm -f "$NEXT"; [ "$rc" -eq 3 ] && exit 0; exit "$rc"; fi\n'
+                'sh "$NEXT"\n'
+                'rc=$?\n'
+                f'"{python_exe}" "{start_py}" --after "$NEXT"\n'
+                'exit "$rc"\n')
         targets = [os.path.join(os.path.expanduser("~"), ".local", "bin")]
         name = "opencode-local"
         _ensure_local_bin_on_path(log)

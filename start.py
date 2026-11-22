@@ -51,7 +51,57 @@ def parse_args():
     p.add_argument("--restart", action="store_true", help="restart the server even if running")
     p.add_argument("--status", action="store_true")
     p.add_argument("--stop", action="store_true")
+    # Used by the opencode-local launcher (see opencode_setup.install_launcher):
+    # --prepare writes the OpenCode command to FILE instead of running it, so
+    # the launcher runs OpenCode itself and no Python process is alive while
+    # it works; --after restores the terminal once OpenCode has exited.
+    p.add_argument("--prepare", metavar="FILE", help=argparse.SUPPRESS)
+    p.add_argument("--after", metavar="FILE", help=argparse.SUPPRESS)
     return p.parse_known_args()
+
+
+DONE = 3  # --prepare exit code: handled, nothing for the launcher to run
+
+
+def write_handoff(path, exe, passthrough):
+    """Command file the launcher runs: OpenCode with the user's arguments."""
+    if os.name == "nt":
+        line = subprocess.list2cmdline([exe] + passthrough).replace("%", "%%")
+        body = "@echo off\r\ncall " + line + "\r\n"
+    else:
+        import shlex
+        body = "exec " + " ".join(shlex.quote(a) for a in [exe] + passthrough) + "\n"
+    with open(path, "w", encoding="utf-8", newline="") as f:
+        f.write(body)
+    with open(path + ".json", "w", encoding="utf-8") as f:
+        json.dump({"modes": save_console_modes(), "lock": folder_lock_path()}, f)
+
+
+def after(path):
+    """Restore the terminal and clear the folder lock after OpenCode exits."""
+    try:
+        with open(path + ".json", encoding="utf-8") as f:
+            info = json.load(f)
+    except (OSError, ValueError):
+        info = {}
+    modes = info.get("modes")
+    restore_terminal([tuple(m) if m else None for m in modes] if modes else None)
+    if info.get("lock"):
+        clear_lock(info["lock"])
+    for p in (path, path + ".json"):
+        try:
+            os.remove(p)
+        except OSError:
+            pass
+    print_closing()
+    return 0
+
+
+def print_closing():
+    print("OpenCode closed. The model server is still running (fast next start).\n"
+          "  continue the last session:  opencode-local -c\n"
+          "  continue a given session:   opencode-local -s <session id>\n"
+          "  stop the model server:      opencode-local --stop")
 
 
 def healthy(port, path="/health"):
@@ -268,6 +318,9 @@ def write_opencode_config(s):
 
 def main():
     opts, passthrough = parse_args()
+    if opts.after:
+        return after(opts.after)
+    handled = DONE if opts.prepare else 0
     s = settings.load(ROOT)
     if s is None:
         print(f"No settings found ({settings.path(ROOT)}). Run setup.cmd (Windows) or "
@@ -276,7 +329,7 @@ def main():
     if opts.stop:
         stop()
         print("Model server stopped.")
-        return 0
+        return handled
     if opts.think:
         s["thinking"] = opts.think
     if opts.think_budget:
@@ -297,7 +350,7 @@ def main():
         print(("Running: " if up else "Not running. Default: ") + settings.describe(s))
         if up and state and state.get("args") != settings.server_args(s, ROOT):
             print("  (the running server uses different settings; the next start restarts it)")
-        return 0
+        return handled
     if opts.restart:
         stop()
     if not ensure_server(s):
@@ -306,7 +359,7 @@ def main():
     write_opencode_config(s)
     if opts.server_only:
         print("Server is running in the background. Stop it with: opencode-local --stop")
-        return 0
+        return handled
     exe = opencode_setup.find_opencode()
     if not exe:
         print("OpenCode is not installed. Install it with:\n"
@@ -314,6 +367,8 @@ def main():
         return 1
     lock = folder_lock_path()
     other = running_pid(lock)
+    if other and opts.prepare and other == os.getppid():
+        other = None
     if other:
         print(f"OpenCode is already open for this folder in another window (process {other}).\n"
               "Two windows in one folder share the session and draw over each other's\n"
@@ -323,6 +378,12 @@ def main():
                 return 1
         except EOFError:
             return 1
+    if opts.prepare:
+        # The launcher (our parent) runs OpenCode and stays alive while it
+        # works, so its process id marks the folder as open.
+        write_lock(lock, os.getppid())
+        write_handoff(opts.prepare, exe, passthrough)
+        return 0
     sys.stdout.flush()
     saved = save_console_modes()
     # Ctrl+C reaches every process in the terminal. OpenCode handles it
@@ -344,10 +405,7 @@ def main():
         restore_terminal(saved)
         clear_lock(lock)
         signal.signal(signal.SIGINT, old_handler)
-    print("OpenCode closed. The model server is still running (fast next start).\n"
-          "  continue the last session:  opencode-local -c\n"
-          "  continue a given session:   opencode-local -s <session id>\n"
-          "  stop the model server:      opencode-local --stop")
+    print_closing()
     return rc
 
 
