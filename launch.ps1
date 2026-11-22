@@ -27,7 +27,9 @@ if ($Folder -match '^[A-Za-z]:$') { $Folder += '\.' }
 $wt = Get-Command wt.exe -ErrorAction SilentlyContinue
 if ($wt) {
     # Windows Terminal renders OpenCode's interface better than the old console.
-    Start-Process $wt.Source -ArgumentList @("-d", "`"$Folder`"", "--title", "OpenCode Local",
+    # Start-Process doesn't quote list items that contain spaces: the title
+    # must be quoted by hand, or wt runs "Local" as the command.
+    Start-Process $wt.Source -ArgumentList @("-d", "`"$Folder`"", "--title", "`"OpenCode Local`"",
                                              "cmd", "/k", "`"$launcher`"")
 } else {
     Start-Process cmd.exe -WorkingDirectory $Folder -ArgumentList @("/k", "title OpenCode Local & `"$launcher`"")
