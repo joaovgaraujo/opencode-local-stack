@@ -55,3 +55,4 @@ llama.cpp.old/
 
 # Built installer (Build-Installer.ps1)
 dist/
+.opencode-open/

@@ -150,6 +150,57 @@ def ensure_server(s):
     return False
 
 
+def folder_lock_path():
+    """One lock file per project folder, holding the OpenCode process id."""
+    import hashlib
+    key = hashlib.sha1(os.path.normcase(os.path.abspath(os.getcwd())).encode()).hexdigest()[:16]
+    d = os.path.join(ROOT, ".opencode-open")
+    os.makedirs(d, exist_ok=True)
+    return os.path.join(d, key + ".pid")
+
+
+def _pid_alive(pid):
+    if os.name == "nt":
+        import ctypes
+        k32 = ctypes.windll.kernel32
+        h = k32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+        if not h:
+            return False
+        code = ctypes.c_ulong()
+        ok = k32.GetExitCodeProcess(h, ctypes.byref(code))
+        k32.CloseHandle(h)
+        return bool(ok) and code.value == 259  # STILL_ACTIVE
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
+def running_pid(lock):
+    try:
+        with open(lock, encoding="ascii") as f:
+            pid = int(f.read().strip())
+    except (OSError, ValueError):
+        return None
+    return pid if _pid_alive(pid) else None
+
+
+def write_lock(lock, pid):
+    try:
+        with open(lock, "w", encoding="ascii") as f:
+            f.write(str(pid))
+    except OSError:
+        pass
+
+
+def clear_lock(lock):
+    try:
+        os.remove(lock)
+    except OSError:
+        pass
+
+
 def save_console_modes():
     """Windows: the console input/output modes before OpenCode changes them."""
     if os.name != "nt":
@@ -248,14 +299,28 @@ def main():
         print("OpenCode is not installed. Install it with:\n"
               f"  npm install -g opencode-ai@{opencode_setup.OPENCODE_VERSION}")
         return 1
+    lock = folder_lock_path()
+    other = running_pid(lock)
+    if other:
+        print(f"OpenCode is already open for this folder in another window (process {other}).\n"
+              "Two windows in one folder share the session and draw over each other's\n"
+              "changes; with -c both continue the SAME session. Close the other one first.")
+        try:
+            if input("Open a second one anyway? [y/N] ").strip().lower() not in ("y", "yes"):
+                return 1
+        except EOFError:
+            return 1
     sys.stdout.flush()
     saved = save_console_modes()
     try:
-        rc = subprocess.call([exe] + passthrough)
+        proc = subprocess.Popen([exe] + passthrough)
+        write_lock(lock, proc.pid)
+        rc = proc.wait()
     except KeyboardInterrupt:
         rc = 130
     finally:
         restore_terminal(saved)
+        clear_lock(lock)
     print("OpenCode closed. The model server is still running (fast next start).\n"
           "  continue the last session:  opencode-local -c\n"
           "  continue a given session:   opencode-local -s <session id>\n"
